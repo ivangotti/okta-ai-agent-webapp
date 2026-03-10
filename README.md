@@ -63,14 +63,21 @@ This application uses a sophisticated **dual-identity token flow** combining use
 │                                                                              │
 │ Result:  ID-JAG Token (oauth-id-jag+jwt)                                    │
 │                                                                              │
-│ ID-JAG Token Claims:                                                        │
+│ ID-JAG Token Claims (Dual Identity):                                        │
 │   typ: "oauth-id-jag+jwt"                                                   │
 │   iss: "https://your-okta-domain.okta.com"                                │
 │   aud: "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER..."          │
-│   sub: "USER_ID_FROM_OKTA" (user ID)                                     │
-│   client_id: "YOUR_AGENT_ID" (agent ID)                             │
+│                                                                              │
+│   sub: "USER_ID_FROM_OKTA"          ← Okta User ID (who needs help)        │
+│   client_id: "YOUR_AGENT_ID"        ← AI Agent ID (who is acting)          │
+│                                                                              │
 │   scope: "ask-nist-mcp"                                                     │
 │   jti: "IDAAG.MUJyYv54I3poALLV3lwKA6uw3P51mWXhTO7VYFrbG_A"                  │
+│                                                                              │
+│   💡 KEY: The ID-JAG encodes BOTH identities in a single token:             │
+│      • "sub" claim = Okta user ID (the person being helped)                 │
+│      • "client_id" claim = AI agent ID (the agent doing the work)           │
+│      This enables full audit trails and fine-grained access policies.       │
 └─────────────────────────────────────────────────────────────────────────────┘
 
                                     ↓ ID-JAG Token
