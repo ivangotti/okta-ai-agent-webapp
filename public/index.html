@@ -492,6 +492,19 @@
     </div>
   </div>
 
+  <!-- MCP Tools Modal -->
+  <div class="modal-overlay" id="mcpModal" onclick="closeMcpModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2>MCP Server Status & Tools</h2>
+        <button class="modal-close" onclick="closeMcpModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="mcpModalBody">
+        <p>Loading MCP tools...</p>
+      </div>
+    </div>
+  </div>
+
   <div class="loading-screen" id="loadingScreen">
     <div class="loading-content">
       <div class="loading-spinner"></div>
@@ -502,7 +515,7 @@
   <header>
     <h1>NIST CSF 2.0 AI Agent</h1>
     <div class="header-right">
-      <div class="status">
+      <div class="status" style="cursor: pointer;" onclick="showMcpTools()" title="Click to view MCP tools">
         <span class="dot" id="statusDot"></span>
         <span id="statusText">Connecting...</span>
       </div>
@@ -532,9 +545,11 @@
     </div>
     <div class="suggestions">
       <span class="suggestion" onclick="useSuggestion(this)">What is NIST CSF 2.0?</span>
-      <span class="suggestion" onclick="useSuggestion(this)">Look up the PROTECT function</span>
-      <span class="suggestion" onclick="useSuggestion(this)">Search for access control subcategories</span>
-      <span class="suggestion" onclick="useSuggestion(this)">Create a profile for a healthcare company</span>
+      <span class="suggestion" onclick="useSuggestion(this)">Look up the GOVERN function</span>
+      <span class="suggestion" onclick="useSuggestion(this)">Search for incident response controls</span>
+      <span class="suggestion" onclick="useSuggestion(this)">What are the DETECT categories?</span>
+      <span class="suggestion" onclick="useSuggestion(this)">Show me access control subcategories</span>
+      <span class="suggestion" onclick="useSuggestion(this)">What questions assess risk management?</span>
     </div>
   </div>
 
@@ -761,9 +776,60 @@
       });
     }
 
-    // Close modal on Escape key
+    // MCP Tools Modal Functions
+    async function showMcpTools() {
+      const modal = document.getElementById('mcpModal');
+      const modalBody = document.getElementById('mcpModalBody');
+
+      modal.classList.add('visible');
+      modalBody.innerHTML = '<p>Loading MCP tools...</p>';
+
+      try {
+        const [healthRes, toolsRes] = await Promise.all([
+          fetch('/api/health'),
+          fetch(`${window.location.origin.replace('3001', '8080')}/api/tools`)
+        ]);
+
+        const health = await healthRes.json();
+        const tools = toolsRes.ok ? await toolsRes.json() : { tools: [] };
+
+        modalBody.innerHTML = `
+          <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px;">
+            <h3 style="color: #4ade80; margin-bottom: 0.75rem;">MCP Server Status</h3>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; font-size: 0.85rem;">
+              <div><strong>Status:</strong> ${health.mcp?.status || 'Unknown'}</div>
+              <div><strong>Tools:</strong> ${health.mcp?.tools_available || 0}</div>
+              <div><strong>Version:</strong> ${health.mcp?.version || 'N/A'}</div>
+              <div><strong>Mode:</strong> ${health.mcp?.mode || 'N/A'}</div>
+            </div>
+          </div>
+
+          <h3 style="color: #60a5fa; margin-bottom: 0.75rem;">Available Tools (${tools.tools?.length || 0})</h3>
+          <div style="display: grid; gap: 0.5rem;">
+            ${(tools.tools || []).map(tool => `
+              <div style="background: #1e293b; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #3b82f6;">
+                <div style="font-weight: 600; color: #60a5fa; margin-bottom: 0.25rem;">${tool.name}</div>
+                <div style="font-size: 0.8rem; color: #94a3b8;">${tool.description || 'No description'}</div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } catch (error) {
+        modalBody.innerHTML = `<p style="color: #f87171;">Error: ${error.message}</p>`;
+      }
+    }
+
+    function closeMcpModal(event) {
+      if (event && event.target !== event.currentTarget) return;
+      document.getElementById('mcpModal').classList.remove('visible');
+    }
+
+    // Close modals on Escape key
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeTokenModal();
+      if (e.key === 'Escape') {
+        closeTokenModal();
+        closeMcpModal();
+      }
     });
 
     // Check health
