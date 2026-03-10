@@ -172,90 +172,117 @@ async function getAgentAccessToken(scopes = []) {
   }
 }
 
-// Get ID-JAG token following Okta AI Agent guide (TWO-STEP PROCESS)
-// Step 1: Exchange user's ID token for ID-JAG token at ORG auth server
-// Step 2: Exchange ID-JAG token for access token at CUSTOM auth server
-async function getIdJagToken(userIdToken, userAccessToken, userId) {
+// Get access token for MCP (THREE-STEP PROCESS per Okta AI Agent spec)
+// Step 1: Validate user is authenticated
+// Step 2: Exchange user's ID token for ID-JAG token at ORG server
+// Step 3: Exchange ID-JAG token for access token at CUSTOM server
+async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
   const now = Date.now();
   const cacheKey = userId;
 
   // Check cache
   const cached = idJagTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > now + 60000) {
-    console.log('Using cached token for user:', userId);
+    console.log('Using cached MCP access token for user:', userId);
     return cached;
   }
 
   try {
-    // Exchange user's ID token for ID-JAG at ORG server (Agent ID Assertion)
-    console.log('=== ID-JAG Token Exchange (Agent ID Assertion) ===');
+    // STEP 1: Exchange user's ID token for ID-JAG at ORG server
+    console.log('\n=== STEP 1: Get ID-JAG Token from ORG Server ===');
     console.log('User ID:', userId);
     console.log('Agent:', AGENT_CLIENT_ID);
 
-    const clientAssertion = generateClientAssertion(AGENT_CLIENT_ID, ORG_TOKEN_ENDPOINT);
+    const orgClientAssertion = generateClientAssertion(AGENT_CLIENT_ID, ORG_TOKEN_ENDPOINT);
 
-    const params = new URLSearchParams({
+    const idJagParams = new URLSearchParams({
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
       requested_token_type: 'urn:ietf:params:oauth:token-type:id-jag',
       client_id: AGENT_CLIENT_ID,
-      subject_token: userIdToken,  // Use ID token
+      subject_token: userIdToken,
       subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-      audience: CUSTOM_AUTH_SERVER,  // Target custom server as audience
-      scope: MCP_SCOPE,  // ask-nist-mcp
+      audience: CUSTOM_AUTH_SERVER,
+      scope: MCP_SCOPE,
       client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
-      client_assertion: clientAssertion
+      client_assertion: orgClientAssertion
     });
 
-    console.log('Request details:');
-    console.log('  Endpoint:', ORG_TOKEN_ENDPOINT);
-    console.log('  Agent ID:', AGENT_CLIENT_ID);
-    console.log('  Audience:', CUSTOM_AUTH_SERVER);
-    console.log('  Scope:', MCP_SCOPE);
-    console.log('  Subject token: ID token from ORG server');
+    console.log('Requesting ID-JAG from:', ORG_TOKEN_ENDPOINT);
 
-    const response = await fetch(ORG_TOKEN_ENDPOINT, {
+    const idJagResponse = await fetch(ORG_TOKEN_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json'
       },
-      body: params.toString()
+      body: idJagParams.toString()
     });
 
-    const responseText = await response.text();
-    console.log('Response status:', response.status);
-
-    if (!response.ok) {
-      console.error('Token exchange failed:', responseText);
-      return generateLocalIdJagToken(userIdToken, userId);
+    if (!idJagResponse.ok) {
+      const error = await idJagResponse.text();
+      console.error('ID-JAG exchange failed:', error);
+      throw new Error(`ID-JAG exchange failed: ${error}`);
     }
 
-    const tokenData = JSON.parse(responseText);
-    console.log('✅ Token exchange successful!');
-    console.log('  Token type:', tokenData.token_type);
-    console.log('  Expires in:', tokenData.expires_in);
-    console.log('  Scope:', tokenData.scope);
+    const idJagData = await idJagResponse.json();
+    const idJagToken = idJagData.access_token;
+    console.log('✅ ID-JAG token received');
+    console.log('   Token type:', idJagData.issued_token_type);
+
+    // STEP 2: Exchange ID-JAG for access token at CUSTOM server (JWT Bearer Grant)
+    console.log('\n=== STEP 2: Exchange ID-JAG for Access Token at CUSTOM Server ===');
+
+    const customTokenEndpoint = `${CUSTOM_AUTH_SERVER}/v1/token`;
+
+    const accessTokenParams = new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: idJagToken,  // Use ID-JAG as assertion
+      scope: MCP_SCOPE
+    });
+
+    console.log('Exchanging ID-JAG at:', customTokenEndpoint);
+
+    const accessTokenResponse = await fetch(customTokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      body: accessTokenParams.toString()
+    });
+
+    if (!accessTokenResponse.ok) {
+      const error = await accessTokenResponse.text();
+      console.error('Access token exchange failed:', error);
+      throw new Error(`Access token exchange failed: ${error}`);
+    }
+
+    const accessTokenData = await accessTokenResponse.json();
+    console.log('✅ MCP access token received');
+    console.log('   Expires in:', accessTokenData.expires_in);
+    console.log('   Scope:', accessTokenData.scope);
 
     const result = {
-      accessToken: tokenData.access_token,
-      expiresAt: now + ((tokenData.expires_in || 3600) * 1000),
-      parsed: parseJwt(tokenData.access_token),
-      tokenType: tokenData.token_type || 'Bearer',
-      scope: tokenData.scope,
-      issuedTokenType: tokenData.issued_token_type,
+      accessToken: accessTokenData.access_token,
+      idJagToken: idJagToken,  // Keep ID-JAG for reference
+      expiresAt: now + ((accessTokenData.expires_in || 3600) * 1000),
+      parsed: parseJwt(accessTokenData.access_token),
+      tokenType: accessTokenData.token_type || 'Bearer',
+      scope: accessTokenData.scope,
       actingParty: {
         agentId: AGENT_CLIENT_ID,
         agentName: AGENT_NAME
       },
       onBehalfOf: userId,
-      isLocal: false,
       fromOkta: true
     };
 
     idJagTokenCache.set(cacheKey, result);
+    console.log('✅ Tokens cached for user:', userId, '\n');
+
     return result;
   } catch (error) {
-    console.error('Failed to get token:', error);
+    console.error('Failed to get MCP access token:', error);
     return generateLocalIdJagToken(userIdToken, userId);
   }
 }
@@ -592,10 +619,10 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
     const user = req.user;
     console.log('=== /api/agent/tokens called for user:', user.id, user.email);
 
-    // Get ID-JAG token (AI Agent token exchange - agent on behalf of user)
-    console.log('Getting token via AI Agent exchange...');
-    const idJagToken = await getIdJagToken(user.idToken, user.accessToken, user.id);
-    console.log('Token obtained:', { fromOkta: idJagToken.fromOkta, isLocal: idJagToken.isLocal });
+    // Get MCP access token (via ID-JAG exchange - agent on behalf of user)
+    console.log('Getting MCP access token via AI Agent exchange...');
+    const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
+    console.log('Token obtained:', { fromOkta: tokenData.fromOkta });
 
     res.json({
       description: 'Agent ID Assertion - Token exchange for agent acting on behalf of user',
@@ -613,14 +640,19 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
       orgAuthServer: `${OKTA_DOMAIN}/oauth2/v1`,  // Add ORG server
       customAuthServer: CUSTOM_AUTH_SERVER,  // Add custom server
       idJagToken: {
-        description: 'ID-JAG token from token exchange',
-        raw: idJagToken.accessToken,
-        parsed: idJagToken.parsed,
-        expiresAt: new Date(idJagToken.expiresAt).toISOString(),
-        tokenType: idJagToken.tokenType,
-        scope: idJagToken.scope,
-        fromOkta: idJagToken.fromOkta || false,
-        isLocal: idJagToken.isLocal || false
+        description: 'ID-JAG token from ORG server (step 1)',
+        raw: tokenData.idJagToken,
+        parsed: parseJwt(tokenData.idJagToken),
+        fromOkta: tokenData.fromOkta
+      },
+      mcpAccessToken: {
+        description: 'MCP access token from CUSTOM server (step 2)',
+        raw: tokenData.accessToken,
+        parsed: tokenData.parsed,
+        expiresAt: new Date(tokenData.expiresAt).toISOString(),
+        tokenType: tokenData.tokenType,
+        scope: tokenData.scope,
+        fromOkta: tokenData.fromOkta
       }
     });
   } catch (error) {
@@ -786,14 +818,14 @@ app.post('/api/chat', ensureAuthenticated, async (req, res) => {
 
     console.log(`\n=== Chat Request from ${user.email} ===`);
 
-    // Get ID-JAG token for MCP calls
-    let idJagToken = null;
+    // Get MCP access token (via ID-JAG exchange)
+    let mcpAccessToken = null;
     try {
-      const token = await getIdJagToken(user.idToken, user.accessToken, user.id);
-      idJagToken = token.accessToken;
-      console.log('ID-JAG token obtained for MCP calls');
+      const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
+      mcpAccessToken = tokenData.accessToken;
+      console.log('MCP access token obtained (via ID-JAG)');
     } catch (e) {
-      console.error('Failed to get ID-JAG token:', e.message);
+      console.error('Failed to get MCP access token:', e.message);
     }
 
     // Get MCP tools
@@ -853,7 +885,7 @@ Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
         console.log(`  Tool: ${toolUse.name}`);
         console.log(`  Input:`, JSON.stringify(toolUse.input));
 
-        const toolResult = await executeMcpTool(toolUse.name, toolUse.input, idJagToken);
+        const toolResult = await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
 
         toolResults.push({
           type: 'tool_result',

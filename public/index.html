@@ -686,11 +686,19 @@
               • Audience: <code style="font-size: 0.7rem;">${agentTokens?.customAuthServer || 'Custom Server'}</code><br>
               • Result: <span style="color: #f59e0b;">ID-JAG Token</span>
             </div>
+            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
+              <strong style="color: #a78bfa;">Step 3: Exchange ID-JAG for Access Token</strong><br>
+              • Grant: jwt-bearer<br>
+              • Assertion: ID-JAG Token<br>
+              • Auth Server: <code>Custom</code><br>
+              • Result: <span style="color: #a78bfa;">MCP Access Token</span>
+            </div>
             <div style="padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-              <strong style="color: #60a5fa;">Step 3: Call MCP Server (Outbound)</strong><br>
-              • Agent uses ID-JAG Token<br>
+              <strong style="color: #60a5fa;">Step 4: Call MCP Server (Outbound)</strong><br>
+              • Agent uses MCP Access Token<br>
               • MCP Server: localhost:8080<br>
-              • Authorization: Bearer {ID-JAG Token}
+              • Authorization: Bearer {Access Token}<br>
+              • MCP validates with Custom Server JWKS
             </div>
           </div>
         </div>
@@ -721,22 +729,34 @@
 
         <div class="token-section" style="border: 2px solid #f59e0b; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
           <h3>
-            <span style="color: #f59e0b;">●</span> ID-JAG Token (Agent ID Assertion)
-            <span class="badge" style="background: #78350f; color: #fbbf24;">Token Exchange</span>
+            <span style="color: #f59e0b;">●</span> ID-JAG Token (Step 2)
+            <span class="badge" style="background: #78350f; color: #fbbf24;">ORG → token-exchange</span>
             ${agentTokens?.idJagToken?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.idJagToken.raw}')">Copy</button>` : ''}
           </h3>
           <div style="font-size: 0.75rem; color: #fbbf24; margin-bottom: 0.5rem;">
-            Agent acting on behalf of user via Agent ID Assertion
-          </div>
-          <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.5rem;">
-            Endpoint: /oauth2/v1/token | Grant: token-exchange | Type: Agent ID Assertion | Scope: ask-nist-mcp
+            Contains dual identity (user + agent) - Exchanged for access token
           </div>
           <div class="token-raw">${agentTokens?.idJagToken?.raw || 'Not available'}</div>
           <div class="token-parsed">
             ${renderClaims(agentTokens?.idJagToken?.parsed)}
           </div>
-          ${agentTokens?.idJagToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ Issued by Okta via Agent ID Assertion</div>' : ''}
-          ${agentTokens?.idJagToken?.isLocal ? '<div style="font-size: 0.7rem; color: #f59e0b; margin-top: 0.5rem;">⚠️ Locally generated fallback</div>' : ''}
+          ${agentTokens?.idJagToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta ORG</div>' : ''}
+        </div>
+
+        <div class="token-section" style="border: 2px solid #a78bfa; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1e1b4b;">
+          <h3>
+            <span style="color: #a78bfa;">●</span> MCP Access Token (Step 3)
+            <span class="badge" style="background: #4c1d95; color: #c4b5fd;">Custom → jwt-bearer</span>
+            ${agentTokens?.mcpAccessToken?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.mcpAccessToken.raw}')">Copy</button>` : ''}
+          </h3>
+          <div style="font-size: 0.75rem; color: #c4b5fd; margin-bottom: 0.5rem;">
+            Final token sent to MCP - MCP validates this with Custom Server JWKS
+          </div>
+          <div class="token-raw">${agentTokens?.mcpAccessToken?.raw || 'Not available'}</div>
+          <div class="token-parsed">
+            ${renderClaims(agentTokens?.mcpAccessToken?.parsed)}
+          </div>
+          ${agentTokens?.mcpAccessToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta Custom Server</div>' : ''}
         </div>
 
         <div style="margin-top: 1rem; padding: 0.75rem; background: #1e293b; border-radius: 6px; font-size: 0.75rem; color: #94a3b8;">

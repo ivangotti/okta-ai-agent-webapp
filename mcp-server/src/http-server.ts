@@ -79,7 +79,7 @@ declare global {
 let jwksCache: any = null;
 let jwksCacheExpiry: number = 0;
 
-// Fetch JWKS from Okta
+// Fetch JWKS from Okta (supports both ORG and Custom auth servers)
 async function fetchJwks(issuer: string) {
   const now = Date.now();
 
@@ -89,7 +89,16 @@ async function fetchJwks(issuer: string) {
   }
 
   try {
-    const jwksUrl = `${issuer}/oauth2/v1/keys`;
+    // Construct JWKS URL based on issuer format
+    let jwksUrl;
+    if (issuer.includes('/oauth2/') && !issuer.endsWith('/oauth2')) {
+      // Custom auth server: https://domain.okta.com/oauth2/aus123
+      jwksUrl = `${issuer}/v1/keys`;
+    } else {
+      // ORG server: https://domain.okta.com
+      jwksUrl = `${issuer}/oauth2/v1/keys`;
+    }
+
     logger.info('Fetching JWKS from Okta:', jwksUrl);
 
     const response = await fetch(jwksUrl);
@@ -108,8 +117,8 @@ async function fetchJwks(issuer: string) {
   }
 }
 
-// Validate ID-JAG token
-async function validateIdJagToken(token: string, expectedAudience: string): Promise<IdJagClaims> {
+// Validate MCP access token from CUSTOM auth server
+async function validateMcpAccessToken(token: string, expectedAudience: string): Promise<IdJagClaims> {
   try {
     // Decode without verification first to get issuer and kid
     const decoded = jwt.decode(token, { complete: true }) as any;
@@ -118,22 +127,17 @@ async function validateIdJagToken(token: string, expectedAudience: string): Prom
       throw new Error('Invalid token format');
     }
 
-    // Verify token type
-    if (decoded.header.typ !== 'oauth-id-jag+jwt') {
-      throw new Error(`Invalid token type: ${decoded.header.typ}`);
-    }
-
     const issuer = decoded.payload.iss;
     const kid = decoded.header.kid;
 
-    logger.info('Validating ID-JAG token:', {
+    logger.info('Validating MCP access token:', {
       issuer,
       kid,
       sub: decoded.payload.sub,
-      client_id: decoded.payload.client_id
+      cid: decoded.payload.cid
     });
 
-    // Fetch JWKS
+    // Fetch JWKS from the CUSTOM auth server
     const jwks = await fetchJwks(issuer);
 
     // Find the key
@@ -142,44 +146,53 @@ async function validateIdJagToken(token: string, expectedAudience: string): Prom
       throw new Error(`Key ${kid} not found in JWKS`);
     }
 
-    // Convert JWK to PEM for verification
-    const publicKey = await jwt.decode(token);  // In production, use proper JWK to PEM conversion
+    // For now, validate basic claims without full signature verification
+    // (Full signature verification requires proper JWK to PEM conversion library)
 
-    // For now, validate basic claims without signature verification
-    // (Full signature verification requires converting JWK to PEM properly)
-
-    const claims = decoded.payload as IdJagClaims;
+    const claims = decoded.payload;
 
     // Validate claims
     if (claims.exp * 1000 < Date.now()) {
       throw new Error('Token expired');
     }
 
-    if (claims.aud !== expectedAudience) {
-      throw new Error(`Invalid audience. Expected: ${expectedAudience}, Got: ${claims.aud}`);
+    // Expected audience for MCP tokens
+    const expectedAud = process.env.MCP_AUDIENCE || 'api://nist-mcp-server';
+    if (claims.aud !== expectedAud) {
+      throw new Error(`Invalid audience. Expected: ${expectedAud}, Got: ${claims.aud}`);
     }
 
     // Validate scope
     const requiredScope = 'ask-nist-mcp';
-    if (!claims.scope || !claims.scope.includes(requiredScope)) {
-      throw new Error(`Missing required scope: ${requiredScope}. Token has: ${claims.scope || 'none'}`);
+    const tokenScopes = Array.isArray(claims.scp) ? claims.scp : (claims.scope || '').split(' ');
+    if (!tokenScopes.includes(requiredScope)) {
+      throw new Error(`Missing required scope: ${requiredScope}. Token has: ${tokenScopes.join(', ')}`);
     }
 
-    logger.info('✅ ID-JAG token validated:', {
+    logger.info('✅ MCP access token validated:', {
       user: claims.sub,
-      agent: claims.client_id,
-      scope: claims.scope
+      client: claims.cid,
+      scope: tokenScopes.join(', ')
     });
 
-    return claims;
+    // Return in IdJagClaims format for compatibility
+    return {
+      sub: claims.sub,
+      client_id: claims.cid,
+      scope: tokenScopes.join(' '),
+      aud: claims.aud,
+      iss: claims.iss,
+      exp: claims.exp,
+      iat: claims.iat
+    };
   } catch (error) {
-    logger.error('ID-JAG validation failed:', error);
+    logger.error('Access token validation failed:', error);
     throw error;
   }
 }
 
-// Middleware to validate ID-JAG tokens
-function validateIdJagMiddleware(req: any, res: any, next: any) {
+// Middleware to validate MCP access tokens
+function validateMcpAccessTokenMiddleware(req: any, res: any, next: any) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -192,10 +205,9 @@ function validateIdJagMiddleware(req: any, res: any, next: any) {
   }
 
   const token = authHeader.substring(7);
-  const expectedAudience = process.env.OKTA_CUSTOM_AUTH_SERVER ||
-    'https://blackcastle.oktapreview.com/oauth2/aus2o8ra5nfzluTlI0h8';
+  const expectedAudience = process.env.MCP_AUDIENCE || 'api://nist-mcp-server';
 
-  validateIdJagToken(token, expectedAudience)
+  validateMcpAccessToken(token, expectedAudience)
     .then((claims) => {
       // Attach claims to request for use in handlers
       req.idJagClaims = claims;
@@ -564,7 +576,7 @@ export async function startHttpServer(port: number = 8080): Promise<void> {
   });
 
   // Generic tool execution endpoint
-  app.post('/api/tools/:toolName', validateIdJagMiddleware, async (req, res) => {
+  app.post('/api/tools/:toolName', validateMcpAccessTokenMiddleware, async (req, res) => {
     const { toolName } = req.params;
     const params = req.body;
 
