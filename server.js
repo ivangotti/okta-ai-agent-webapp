@@ -236,6 +236,7 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
 
     const accessTokenParams = new URLSearchParams({
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      client_id: AGENT_CLIENT_ID,
       assertion: idJagToken,  // Use ID-JAG as assertion
       scope: MCP_SCOPE
     });
