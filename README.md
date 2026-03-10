@@ -60,10 +60,16 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 - ✅ **Okta SSO Authentication** - Users login via OpenID Connect
 - ✅ **AI Agent Identity** - Agent has its own Okta identity
 - ✅ **ID-JAG Tokens** - Dual-identity tokens per IETF spec
-- ✅ **Claude AI Integration** - Powered by Anthropic Claude
+- ✅ **Claude AI Integration** - Powered by Anthropic Claude via LiteLLM
 - ✅ **MCP Tool Access** - 38 tools to query NIST CSF database
 - ✅ **Token Viewer** - Inspect all tokens and their claims
 - ✅ **Security** - End-to-end token validation with JWKS
+
+> 💡 **AI Backend:** This project uses [LiteLLM](https://litellm.ai/) as a proxy to Anthropic's Claude API. You can use Anthropic's API directly by changing the environment variables:
+> - `ANTHROPIC_BASE_URL` → `https://api.anthropic.com`
+> - `LITELLM_KEY` → Your Anthropic API key
+>
+> The application is compatible with both LiteLLM proxies and direct Anthropic API connections.
 
 ---
 
