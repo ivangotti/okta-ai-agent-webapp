@@ -4,647 +4,552 @@
 >
 > This is a prototype implementation demonstrating Okta AI Agent authentication with ID-JAG token exchange. It is intended for learning, testing, and development purposes only. Do not deploy to production environments without proper security review, hardening, and compliance validation.
 
-A secure, Okta-protected web chatbot for interacting with the NIST Cybersecurity Framework 2.0 via AI.
+An Okta-protected AI chatbot that uses **Okta AI Agent Identity** with **ID-JAG (Identity Assertion JWT Authorization Grant)** tokens to securely query the NIST Cybersecurity Framework 2.0.
 
 **This repository includes:**
 - 🤖 AI Agent Webapp (main directory)
 - 🔧 NIST CSF 2.0 MCP Server (`mcp-server/` directory)
 
+---
+
 ## Quick Start
 
 ```bash
-# 1. Setup everything (first time only)
+# 1. Clone repository
+git clone https://github.com/ivangotti/okta-ai-agent-webapp.git
+cd okta-ai-agent-webapp
+
+# 2. Setup everything
 npm run setup:all
 
-# 2. Configure environment
+# 3. Configure environment
 cp .env.example .env
 # Edit .env with your Okta and LiteLLM credentials
 
-# 3. Start both services
+# 4. Start both services
 npm run start:both
 ```
 
 **Access:**
-- Webapp: http://localhost:3001
-- MCP Server: http://localhost:8080
-
-## Overview
-
-This standalone web application provides a chat interface to interact with the NIST CSF 2.0 framework using Claude AI. It implements **Okta AI Agent Identity** with ID-JAG (Identity Assertion JWT Authorization Grant) token exchange, allowing an AI agent to act on behalf of authenticated users.
-
-## The Token Dance Explained
-
-This application uses a sophisticated **dual-identity token flow** combining user authentication with AI agent authorization.
-
-### Two Identities, Two Client IDs
-
-| Identity | Client ID | Type | Purpose |
-|----------|-----------|------|---------|
-| **Webapp (User Auth)** | `YOUR_WEBAPP_CLIENT_ID` | Web Application | Authenticates human users via Okta SSO |
-| **AI Agent** | `YOUR_AGENT_ID` | AI Agent (Workload) | Acts on behalf of users to call APIs |
-
-### Complete Token Flow (Step-by-Step)
-
-#### STEP 1: User Authentication (Inbound)
-
-**Client:** Webapp (`YOUR_WEBAPP_CLIENT_ID`)
-**Server:** ORG Authorization Server
-**Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/authorize`
-**Grant:** `authorization_code`
-**Result:** User ID Token + Access Token
-
-**User ID Token Claims:**
-```json
-{
-  "iss": "https://your-okta-domain.okta.com",
-  "aud": "YOUR_WEBAPP_CLIENT_ID",
-  "sub": "USER_ID_FROM_OKTA",
-  "email": "user@example.com",
-  "name": "User Name"
-}
-```
-
-⬇️ **User ID Token** ⬇️
+- 🌐 Webapp: http://localhost:3001
+- 🔧 MCP Server: http://localhost:8080
 
 ---
 
-#### STEP 2: ID-JAG Token Exchange (Agent Identity Assertion)
+## What is This?
 
-**Client:** AI Agent (`YOUR_AGENT_ID`)
-**Server:** ORG Authorization Server
-**Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
-**Grant:** `urn:ietf:params:oauth:grant-type:token-exchange`
-**Auth:** `private_key_jwt` (RS256)
+This application demonstrates **Okta AI Agent architecture** where an AI agent can securely act on behalf of authenticated users.
 
-**Request Parameters:**
-```
-grant_type: urn:ietf:params:oauth:grant-type:token-exchange
-requested_token_type: urn:ietf:params:oauth:token-type:id-jag
-subject_token: {User's ID Token}
-subject_token_type: urn:ietf:params:oauth:token-type:id_token
-audience: https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
-scope: ask-nist-mcp
-client_id: YOUR_AGENT_ID
-client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-client_assertion: {JWT signed with agent's private key}
-```
+### Key Concepts
 
-**Result:** ID-JAG Token
+**Two Identities:**
+- 👤 **User** (`YOUR_WEBAPP_CLIENT_ID`) - Human authenticating via Okta SSO
+- 🤖 **AI Agent** (`YOUR_AGENT_ID`) - AI acting on behalf of user
 
-**ID-JAG Token Claims (Dual Identity):**
-```json
-{
-  "typ": "oauth-id-jag+jwt",
-  "iss": "https://your-okta-domain.okta.com",
-  "aud": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID",
-  "sub": "USER_ID_FROM_OKTA",         // ← Okta User ID (who needs help)
-  "client_id": "YOUR_AGENT_ID",       // ← AI Agent ID (who is acting)
-  "scope": "ask-nist-mcp",
-  "jti": "IDAAG.MUJyYv54I3poALLV3lwKA6uw3P51mWXhTO7VYFrbG_A"
-}
-```
-
-💡 **KEY:** The ID-JAG encodes BOTH identities:
-- **`sub` claim** = Okta user ID (the person being helped)
-- **`client_id` claim** = AI agent ID (the agent doing the work)
-
-This enables full audit trails and fine-grained access policies.
-
-⬇️ **ID-JAG Token** ⬇️
+**Special Token (ID-JAG):**
+- Contains BOTH user and agent identity in one cryptographically-signed token
+- Enables secure delegation: "Agent X acting for User Y"
+- Validated by resource servers (MCP) via Okta's public keys
 
 ---
 
-#### STEP 3: Call MCP Server (Outbound)
+## Features
 
-**Agent → MCP Server**
-**Authorization:** `Bearer {ID-JAG Token}`
+- ✅ **Okta SSO Authentication** - Users login via OpenID Connect
+- ✅ **AI Agent Identity** - Agent has its own Okta identity
+- ✅ **ID-JAG Tokens** - Dual-identity tokens per IETF spec
+- ✅ **Claude AI Integration** - Powered by Anthropic Claude
+- ✅ **MCP Tool Access** - 38 tools to query NIST CSF database
+- ✅ **Token Viewer** - Inspect all tokens and their claims
+- ✅ **Security** - End-to-end token validation with JWKS
 
-**MCP server validates:**
-- Token signature (from ORG server's JWKS)
-- Token audience matches its auth server
-- Scope includes required permissions
-- Token not expired
+---
 
-**MCP knows:**
-- User identity from `sub` claim
-- Agent identity from `client_id` claim
-- Granted scopes from `scope` claim
+## How It Works (The Token Dance)
 
-### When to Use Which Server
+### Simple Flow
 
-| Action | Server | Endpoint | Why |
-|--------|--------|----------|-----|
-| **User Login** | ORG | `/oauth2/v1/authorize` | Users authenticate at org level |
-| **Get User Tokens** | ORG | `/oauth2/v1/token` | Exchange auth code for tokens |
-| **ID-JAG Exchange** | ORG | `/oauth2/v1/token` | Only ORG can issue ID-JAG tokens |
-| **Validate ID-JAG** | ORG | `/oauth2/v1/keys` | Get JWKS to verify signature |
-| **Call MCP** | Custom | `localhost:8080` | MCP validates with custom server audience |
+```
+1. User logs in → Gets ID Token
+2. Agent exchanges ID Token → Gets ID-JAG Token
+3. Agent calls MCP with ID-JAG → Gets data
+4. Claude synthesizes answer → User sees response
+```
 
-### When to Use Which Client ID
+### Three Steps in Detail
 
-| Operation | Client ID | Client Secret / Key | Authentication Method |
-|-----------|-----------|---------------------|----------------------|
-| **User Login** | `YOUR_WEBAPP_CLIENT_ID` | Client Secret | `client_secret_post` |
-| **ID-JAG Exchange** | `YOUR_AGENT_ID` | Private JWK | `private_key_jwt` (RS256) |
+#### Step 1: User Authentication 👤
 
-### Critical Rules
-
-1. **Users MUST authenticate via ORG server** - ID-JAG requires ID tokens from ORG
-2. **Agent exchanges at ORG server** - Only ORG can issue ID-JAG tokens
-3. **Audience points to custom server** - Where the ID-JAG will be used
-4. **Scope must be defined in custom server** - But requested during ORG exchange
-5. **Agent uses JWT Bearer assertion** - Not client_secret
-
-### Complete Token Flow (Step-by-Step)
-
-#### STEP 1: User Authentication (Inbound)
-
-- **Client:** Webapp (`YOUR_WEBAPP_CLIENT_ID`)
-- **Server:** ORG Authorization Server
+- **Client:** Webapp (`YOUR_WEBAPP_CLIENT_ID` - Web Application)
+- **Server:** Okta ORG Authorization Server
 - **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/authorize`
-- **Grant:** `authorization_code`
 - **Result:** User ID Token + Access Token
 
-**User ID Token Claims:**
+**User ID Token contains:**
 ```json
 {
   "iss": "https://your-okta-domain.okta.com",
   "aud": "YOUR_WEBAPP_CLIENT_ID",
-  "sub": "USER_ID_FROM_OKTA",
+  "sub": "USER_ID_FROM_OKTA",  // User's Okta ID
   "email": "user@example.com",
   "name": "User Name"
 }
 ```
 
-⬇️ **User ID Token flows to Agent** ⬇️
-
 ---
 
-#### STEP 2: ID-JAG Token Exchange (Agent Identity Assertion)
+#### Step 2: ID-JAG Token Exchange 🤖
 
-- **Client:** AI Agent (`YOUR_AGENT_ID`)
-- **Server:** ORG Authorization Server
+- **Client:** AI Agent (`YOUR_AGENT_ID` - AI Agent/Workload)
+- **Server:** Okta ORG Authorization Server (**NOT custom server**)
 - **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
-- **Grant:** `urn:ietf:params:oauth:grant-type:token-exchange`
-- **Auth:** `private_key_jwt` (RS256)
+- **Grant:** Token Exchange
+- **Auth:** Agent signs JWT with private key (RS256)
 
-**Request Parameters:**
-```
-grant_type: urn:ietf:params:oauth:grant-type:token-exchange
-requested_token_type: urn:ietf:params:oauth:token-type:id-jag
-subject_token: {User's ID Token}
-subject_token_type: urn:ietf:params:oauth:token-type:id_token
-audience: https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
-scope: ask-nist-mcp
-client_id: YOUR_AGENT_ID
-client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-client_assertion: {JWT signed with agent's private key}
+**Request to Okta:**
+```javascript
+POST /oauth2/v1/token
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+requested_token_type=urn:ietf:params:oauth:token-type:id-jag
+client_id=YOUR_AGENT_ID
+subject_token={User's ID Token}
+subject_token_type=urn:ietf:params:oauth:token-type:id_token
+audience=https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER
+scope=ask-nist-mcp
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={JWT signed with agent's private key}
 ```
 
-**ID-JAG Token Claims (Dual Identity):**
+**Okta returns ID-JAG Token:**
 ```json
 {
   "typ": "oauth-id-jag+jwt",
   "iss": "https://your-okta-domain.okta.com",
-  "aud": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID",
-  "sub": "USER_ID_FROM_OKTA",         // ← Okta User ID (who needs help)
-  "client_id": "YOUR_AGENT_ID",       // ← AI Agent ID (who is acting)
-  "scope": "ask-nist-mcp",
-  "jti": "IDAAG...."
+  "aud": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER",
+  "sub": "USER_ID_FROM_OKTA",         // ← User ID
+  "client_id": "YOUR_AGENT_ID",       // ← Agent ID
+  "scope": "ask-nist-mcp"
 }
 ```
 
-💡 **KEY:** The ID-JAG encodes BOTH identities:
-- **`sub` claim** = Okta user ID (the person being helped)
-- **`client_id` claim** = AI agent ID (the agent doing the work)
-
-⬇️ **ID-JAG Token flows to MCP Server** ⬇️
+💡 **Dual Identity:** Token proves "Agent YOUR_AGENT_ID is acting for User USER_ID"
 
 ---
 
-#### STEP 3: Call MCP Server (Outbound)
+#### Step 3: Call MCP Server 🔧
 
 - **Agent → MCP Server**
 - **Authorization:** `Bearer {ID-JAG Token}`
-
-**MCP server validates:**
-- Token signature (from ORG server's JWKS)
-- Token audience matches its auth server
-- Scope includes required permissions
-- Token not expired
-
-**MCP extracts:**
-- User identity from `sub` claim
-- Agent identity from `client_id` claim
-- Granted scopes from `scope` claim
+- **MCP validates:** Calls Okta JWKS, verifies signature, checks claims
+- **MCP knows:** User ID (`sub`) + Agent ID (`client_id`)
 
 ---
 
-### How MCP Validates ID-JAG Tokens
+### Critical Rules
 
-The MCP server performs cryptographic validation on every request:
-
-#### Validation Steps
-
-1. **Extract Token**
-   - Gets token from `Authorization: Bearer {token}` header
-
-2. **Decode Token** (without verification)
-   - Extracts header: `kid` (key ID), `typ` (token type), `alg` (algorithm)
-   - Extracts claims: `iss`, `aud`, `sub`, `client_id`, `scope`, `exp`
-
-3. **Verify Token Type**
-   - Checks: `typ === "oauth-id-jag+jwt"`
-
-4. **Fetch Okta's Public Keys (JWKS)**
-   - Calls: `https://your-okta-domain.okta.com/oauth2/v1/keys`
-   - Gets RSA public keys for signature verification
-   - Caches for 1 hour (performance)
-
-5. **Find Matching Key**
-   - Matches token's `kid` with JWKS key ID
-
-6. **Verify Cryptographic Signature**
-   - Uses Okta's public key to verify token signature
-   - Proves token was issued by Okta (not forged)
-   - Proves token hasn't been tampered with
-
-7. **Validate Claims**
-   - **Expiration:** `exp` must be in future
-   - **Audience:** Must match MCP's custom auth server
-   - **Issuer:** Must be Okta ORG server
-   - **Scope:** Must contain `ask-nist-mcp` (rejects if missing)
-
-8. **Extract Identity**
-   ```typescript
-   req.userId = claims.sub          // "00uporuxeuOkYxp9E0h7"
-   req.agentId = claims.client_id   // "wlp2o86e2kkTN0tuS0h8"
-   ```
-
-9. **Process Request**
-   - MCP now knows WHO (user + agent) is making the request
-   - Enables audit logging and access control
-
-#### Security Benefits
-
-| Check | Purpose |
-|-------|---------|
-| Signature verification | Proves token issued by Okta |
-| Expiration check | Prevents replay with old tokens |
-| Audience validation | Token is for THIS server |
-| Type validation | Ensures ID-JAG format |
-| JWKS from Okta | Real-time key rotation support |
-
-**Result:** Every MCP request is authenticated with dual identity (user + agent) verified by Okta.
+| Rule | Why |
+|------|-----|
+| **Users MUST login via ORG server** | ID-JAG requires ID tokens from ORG |
+| **ID-JAG exchange at ORG server** | Only ORG can issue ID-JAG tokens |
+| **Audience = custom server** | Where ID-JAG will be used (but exchange at ORG) |
+| **Agent uses private key JWT** | Not client_secret |
+| **Scope: ask-nist-mcp** | Must be requested and validated |
 
 ---
 
-### How to Get an ID-JAG Token (Technical Details)
+## Installation & Setup
 
-#### The HTTP Request
+### Prerequisites
 
-**Endpoint:**
+- Node.js 20.x or higher
+- Okta organization with AI Agent support
+- LiteLLM API access
+- Git
+
+### Step 1: Environment Configuration
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OKTA_DOMAIN` | Your Okta org | `https://your-org.okta.com` |
+| `OKTA_ISSUER` | ORG server issuer | `https://your-org.okta.com` |
+| `OKTA_CLIENT_ID` | Webapp OAuth client | `0oa2o8rchw8BvvkEA0h8` |
+| `OKTA_CLIENT_SECRET` | Webapp secret | (from Okta) |
+| `AGENT_CLIENT_ID` | AI Agent ID | `wlp2o86e2kkTN0tuS0h8` |
+| `CUSTOM_AUTH_SERVER` | Custom auth server | `https://your-org.okta.com/oauth2/aus...` |
+| `AGENT_PRIVATE_KEY_PATH` | Path to agent JWK | `./agent-keys/agent-private-key.json` |
+| `LITELLM_KEY` | LiteLLM API key | (your key) |
+| `MCP_SERVER_URL` | MCP endpoint | `http://localhost:8080` |
+
+### Step 2: Install Dependencies
+
+```bash
+npm run setup:all
+```
+
+This installs dependencies for both webapp and MCP server.
+
+### Step 3: Start Services
+
+```bash
+npm run start:both
+```
+
+Or start separately:
+```bash
+# Terminal 1
+npm run start:mcp
+
+# Terminal 2
+npm start
+```
+
+---
+
+## How to Use
+
+1. **Open** http://localhost:3001
+2. **Login** with your Okta credentials
+3. **Ask questions** about NIST CSF 2.0
+4. **Click your name** to view tokens
+5. **Click "Connected (38 tools)"** to see MCP tools
+
+### Example Questions
+
+- "What is NIST CSF 2.0?"
+- "Look up the GOVERN function"
+- "Search for incident response controls"
+- "What are the DETECT categories?"
+- "Show me access control subcategories"
+- "What questions assess risk management?"
+
+---
+
+## Technical Deep Dive
+
+### Architecture
+
+**Component Flow:**
+```
+User → Webapp → Claude AI → MCP Server
+         ↓         ↓           ↓
+      Okta SSO  (decides)  NIST DB
+                (to use tools)
+```
+
+**Authorization Servers:**
+
+| Server | URL | Used For |
+|--------|-----|----------|
+| **ORG** | `your-okta-domain.okta.com/oauth2/v1` | User login, ID-JAG exchange |
+| **Custom** | `your-okta-domain.okta.com/oauth2/aus...` | Audience, scope definition |
+
+### When to Use Which Client ID
+
+| Operation | Client ID | Auth Method |
+|-----------|-----------|-------------|
+| **User Login** | `YOUR_WEBAPP_CLIENT_ID` | client_secret |
+| **ID-JAG Exchange** | `YOUR_AGENT_ID` | private_key_jwt (RS256) |
+
+### Getting an ID-JAG Token
+
+**Endpoint (MUST be ORG server):**
 ```
 POST https://your-okta-domain.okta.com/oauth2/v1/token
 ```
 
-**Headers:**
-```
-Content-Type: application/x-www-form-urlencoded
-Accept: application/json
-```
+⚠️ **NOT** `https://your-okta-domain.okta.com/oauth2/aus.../v1/token`
 
-**Body Parameters (URL-encoded):**
-```
-grant_type=urn:ietf:params:oauth:grant-type:token-exchange
-requested_token_type=urn:ietf:params:oauth:token-type:id-jag
-client_id=YOUR_AGENT_ID
-subject_token={USER_ID_TOKEN}
-subject_token_type=urn:ietf:params:oauth:token-type:id_token
-audience=https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
-scope=ask-nist-mcp
-client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
-client_assertion={SIGNED_JWT}
-```
+**Agent Authentication (Client Assertion):**
 
-#### Client Assertion (Agent Authentication)
-
-The agent proves its identity by signing a JWT with its **private RSA key** (NOT a client_secret):
-
-**JWT Header:**
-```json
-{
-  "alg": "RS256",
-  "kid": "5735db861203a85ed98ee80a18543743"
-}
-```
-
-**JWT Payload:**
-```json
-{
-  "iss": "YOUR_AGENT_ID",
-  "sub": "YOUR_AGENT_ID",
-  "aud": "https://your-okta-domain.okta.com/oauth2/v1/token",
-  "iat": 1773106644,
-  "exp": 1773106944,
-  "jti": "unique-random-uuid"
-}
-```
-
-**Signature:** Created with agent's private key (RS256 algorithm)
-
-#### Response from Okta
+The agent creates a signed JWT to prove its identity:
 
 ```json
 {
-  "token_type": "N_A",
-  "expires_in": 300,
-  "access_token": "eyJraWQiOiJBZ1dsLT...",
-  "issued_token_type": "urn:ietf:params:oauth:token-type:id-jag"
+  "header": {
+    "alg": "RS256",
+    "kid": "agent-key-id"
+  },
+  "payload": {
+    "iss": "YOUR_AGENT_ID",
+    "sub": "YOUR_AGENT_ID",
+    "aud": "https://your-okta-domain.okta.com/oauth2/v1/token",
+    "iat": 1773106644,
+    "exp": 1773106944,
+    "jti": "unique-uuid"
+  }
 }
 ```
 
-The `access_token` field contains the ID-JAG token (despite the field name).
+Signed with agent's **private RSA key** (NOT client_secret).
 
-#### Code Implementation
-
+**Code:**
 ```javascript
 async function getIdJagToken(userIdToken, userId) {
+  // ⚠️ CRITICAL: Exchange MUST happen at ORG authorization server
+  const ORG_TOKEN_ENDPOINT = 'https://your-okta-domain.okta.com/oauth2/v1/token';
+
   // Generate client assertion
   const clientAssertion = generateClientAssertion(
     AGENT_CLIENT_ID,
-    'https://your-okta-domain.okta.com/oauth2/v1/token'  // ⚠️ MUST be ORG server
+    ORG_TOKEN_ENDPOINT  // ⚠️ Audience of JWT = token endpoint
   );
 
   // Token exchange request
-  const response = await fetch(
-    'https://your-okta-domain.okta.com/oauth2/v1/token',  // ⚠️ MUST be ORG server
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-        requested_token_type: 'urn:ietf:params:oauth:token-type:id-jag',
-        client_id: AGENT_CLIENT_ID,
-        subject_token: userIdToken,
-        subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-        audience: CUSTOM_AUTH_SERVER,  // Points to custom server (where token will be used)
-        scope: 'ask-nist-mcp',
-        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
-        client_assertion: clientAssertion
-      })
-    }
-  );
+  const response = await fetch(ORG_TOKEN_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      requested_token_type: 'urn:ietf:params:oauth:token-type:id-jag',
+      client_id: AGENT_CLIENT_ID,
+      subject_token: userIdToken,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+      audience: CUSTOM_AUTH_SERVER,  // Where ID-JAG will be used
+      scope: 'ask-nist-mcp',
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: clientAssertion
+    })
+  });
 
   const data = await response.json();
   return data.access_token;  // ID-JAG token
 }
 ```
 
-**⚠️ Critical:**
-- **Token exchange endpoint MUST be the ORG authorization server** (`/oauth2/v1/token`)
-- **NOT the custom authorization server** (`/oauth2/aus.../v1/token`)
-- The `audience` parameter points to the custom server (target), but the exchange happens at ORG
-- Only the ORG server can issue ID-JAG tokens
+### MCP Token Validation
 
-**Key Point:** Agent authenticates with **signed JWT** (private key), not client_secret!
+The MCP server validates every request:
+
+1. **Extracts** ID-JAG from `Authorization: Bearer {token}`
+2. **Fetches** Okta's public keys (JWKS) from `/oauth2/v1/keys`
+3. **Verifies** cryptographic signature (proves Okta issued it)
+4. **Validates** claims:
+   - Expiration (`exp` must be future)
+   - Audience (`aud` must match custom server)
+   - Issuer (`iss` must be ORG server)
+   - **Scope (`scope` must contain `ask-nist-mcp`)**
+5. **Extracts** identity:
+   - User ID from `sub` claim
+   - Agent ID from `client_id` claim
+6. **Processes** request with full context
+
+**Security:** Every MCP call is cryptographically authenticated with dual identity verified by Okta.
 
 ---
 
-## Architecture
+## API Endpoints
 
-**Component Flow:**
-```
-Web Browser → Express Server → AI Agent Module
-    ↓              ↓                   ↓
-Chat UI      Session Mgmt      Token Exchange
-             Client ID:        Agent ID:
-             YOUR_WEBAPP...    YOUR_AGENT...
-                   ↓                   ↓
-            ┌──────┴──────┐     ┌─────┴────┐
-            ↓             ↓     ↓          ↓
-      LiteLLM API    MCP HTTP API    Okta Servers
-      Claude AI      38 NIST Tools   Auth & Exchange
-```
+### Webapp Endpoints
 
-**Okta Servers:**
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/` | GET | Required | Chat interface |
+| `/login` | GET | - | Okta login |
+| `/logout` | GET | - | Logout (clears SSO) |
+| `/session-expired` | GET | - | Session expired page |
+| `/authorization-code/callback` | GET | - | OAuth callback |
+| `/api/user` | GET | - | Current user info |
+| `/api/tokens` | GET | Required | User tokens (ID + Access) |
+| `/api/agent/tokens` | GET | Required | Agent tokens + ID-JAG |
+| `/api/chat` | POST | Required | Send chat message |
+| `/api/health` | GET | - | System health check |
 
-| Server | URL | Purpose |
-|--------|-----|---------|
-| **ORG Server** | `your-okta-domain.okta.com/oauth2/v1` | User login, ID-JAG exchange, token validation |
-| **Custom Server** | `your-okta-domain.okta.com/oauth2/YOUR_CUSTOM...` | Audience definition, scope configuration |
+### MCP Server Endpoints
 
-## Features
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | GET | - | MCP health check |
+| `/api/tools` | GET | - | List all 38 tools |
+| `/api/tools/:toolName` | POST | **ID-JAG Required** | Execute MCP tool |
 
-- **Okta SSO Authentication** - Secure login via OpenID Connect
-- **AI-Powered Chat** - Claude Sonnet via LiteLLM proxy
-- **Token Inspector** - Click username to view parsed ID/Access tokens
-- **Session Management** - Secure cookie-based sessions (24hr expiry)
-- **Responsive UI** - Modern dark-themed chat interface
-- **Real-time Status** - MCP server connection indicator
-
-## Project Structure
-
-```
-webapp/
-├── server.js              # Express server with Okta auth & API routes
-├── package.json           # Dependencies and scripts
-├── README.md              # This file
-└── public/
-    └── index.html         # Single-page chat application
-```
-
-### File Descriptions
-
-| File | Description |
-|------|-------------|
-| `server.js` | Main Express server handling authentication, session management, and API proxying |
-| `public/index.html` | Frontend SPA with chat UI, token modal, and authentication flow |
-| `package.json` | Node.js dependencies (express, passport, passport-openidconnect) |
-
-## Prerequisites
-
-- **Node.js** 20.x or higher
-- **Okta Application** configured for OIDC
-- **LiteLLM API** access with valid API key
+---
 
 ## Project Structure
 
 ```
 okta-ai-agent-webapp/
 ├── server.js              # Express server with Okta auth
-├── public/                # Frontend UI
+├── public/
+│   └── index.html         # Frontend chat UI
+├── agent-keys/
+│   └── agent-private-key.json  # Agent's private JWK (not in git)
 ├── package.json           # Webapp dependencies
 ├── .env                   # Configuration (not in git)
+├── .env.example           # Configuration template
 ├── README.md              # This file
 └── mcp-server/            # NIST CSF 2.0 MCP Server
     ├── src/               # TypeScript source
-    ├── data/              # Framework data
-    ├── scripts/           # Build scripts
-    ├── package.json       # MCP dependencies
-    └── README.md          # MCP server docs
+    ├── dist/              # Compiled JavaScript
+    ├── data/              # NIST CSF framework data
+    ├── scripts/           # Setup scripts
+    └── package.json       # MCP dependencies
 ```
 
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ANTHROPIC_BASE_URL` | LiteLLM proxy URL | `https://your-litellm-provider.com` |
-| `LITELLM_KEY` | LiteLLM API key | Required |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Claude model name | `claude-4-5-sonnet` |
-| `MCP_SERVER_URL` | MCP HTTP server URL | `http://localhost:8080` |
-| `PORT` | Webapp server port | `3001` |
-
-### Okta Configuration
-
-**All secrets are now in environment variables** (`.env` file).
-
-Configure these in your `.env` file:
-
-| Environment Variable | Description | Required |
-|---------------------|-------------|----------|
-| `OKTA_DOMAIN` | Your Okta domain | Yes |
-| `OKTA_ISSUER` | Auth server (use `/oauth2/default` for ID-JAG) | Yes |
-| `OKTA_CLIENT_ID` | Webapp OAuth client ID | Yes |
-| `OKTA_CLIENT_SECRET` | Webapp client secret | Yes |
-| `OKTA_REDIRECT_URI` | OAuth callback URL | Yes |
-| `AGENT_CLIENT_ID` | AI agent client ID | Yes |
-| `CUSTOM_AUTH_SERVER` | Custom auth server URL (target for ID-JAG) | Yes |
-| `AGENT_PRIVATE_KEY_PATH` | Path to agent's JWK private key | Yes |
-
-**Scopes:** `openid profile email`
-
-**⚠️ Security:** Never commit `.env` or secrets to version control!
-
-## Installation
-
-### 1. Setup Environment Variables
-
-```bash
-cd webapp
-
-# Copy the example environment file
-cp .env.example .env
-
-# Edit .env with your actual credentials
-nano .env  # or use your preferred editor
-```
-
-**Required Environment Variables:**
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OKTA_DOMAIN` | Your Okta domain | `https://your-domain.okta.com` |
-| `OKTA_ISSUER` | Auth server for user login | `https://your-domain.okta.com/oauth2/default` |
-| `OKTA_CLIENT_ID` | Webapp client ID | `YOUR_WEBAPP_CLIENT_ID` |
-| `OKTA_CLIENT_SECRET` | Webapp client secret | (from Okta app settings) |
-| `AGENT_CLIENT_ID` | AI agent client ID | `YOUR_AGENT_ID` |
-| `CUSTOM_AUTH_SERVER` | Custom auth server URL | `https://your-domain.okta.com/oauth2/aus123...` |
-| `LITELLM_KEY` | LiteLLM API key | (your API key) |
-| `SESSION_SECRET` | Session encryption secret | (random string) |
-
-**⚠️ Security:** Never commit `.env` to version control!
-
-### 2. Install Dependencies
-
-```bash
-npm install
-```
-
-## Usage
-
-### 1. Start the MCP HTTP Server (Required)
-
-```bash
-# From the parent nist-csf-2-mcp-server directory
-npm run start:http
-```
-
-### 2. Start the Webapp
-
-```bash
-cd webapp
-npm start
-```
-
-### 3. Access the Application
-
-Open **http://localhost:3001** in your browser. You'll be redirected to Okta for authentication.
-
-## API Endpoints
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/` | GET | Required | Main chat interface (redirects to /login if not authenticated) |
-| `/login` | GET | - | Initiates Okta OIDC login flow |
-| `/logout` | GET | - | Logs out and redirects to Okta logout |
-| `/authorization-code/callback` | GET | - | Okta OAuth callback handler |
-| `/login-error` | GET | - | Displays authentication errors |
-| `/api/user` | GET | - | Returns current user info (or null) |
-| `/api/tokens` | GET | Required | Returns raw and parsed JWT tokens |
-| `/api/health` | GET | - | Health check for MCP and LLM services |
-| `/api/chat` | POST | Required | Sends messages to Claude AI |
-| `/api/tools` | GET | Required | Lists available MCP tools |
-
-## Token Inspection
-
-Click on your username in the header to view:
-
-- **ID Token** (OpenID Connect)
-  - User identity claims (sub, name, email)
-  - Authentication metadata (iss, aud, iat, exp)
-
-- **Access Token** (OAuth 2.0)
-  - Authorization claims (scp, groups)
-  - Token metadata
-
-Both tokens show:
-- Raw JWT string (copyable)
-- Parsed claims table with formatted timestamps
+---
 
 ## Dependencies
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| express | ^4.18.2 | Web framework |
-| express-session | ^1.19.0 | Session management |
-| passport | ^0.7.0 | Authentication middleware |
-| passport-openidconnect | ^0.1.2 | Okta OIDC strategy |
-| cors | ^2.8.5 | CORS middleware |
+**Webapp:**
+- express - Web framework
+- passport + passport-openidconnect - Okta SSO
+- jsonwebtoken - JWT signing/validation
+- dotenv - Environment configuration
+- express-session - Session management
+
+**MCP Server:**
+- @modelcontextprotocol/sdk - MCP protocol
+- better-sqlite3 - Database
+- zod - Input validation
+- TypeScript - Type safety
+
+---
+
+## Token Viewer
+
+Click your username in the header to see:
+
+### User Tokens (Inbound)
+- **ID Token** - User identity from Okta SSO
+- **Access Token** - User authorization
+
+### ID-JAG Token (Agent)
+- **Dual Identity** - Contains both user and agent
+- **Claims visible** - See `sub` (user) and `client_id` (agent)
+- **Copyable** - Copy raw JWT for inspection
+
+### Token Flow Diagram
+Shows the 3-step process with real client IDs and server URLs.
+
+---
+
+## MCP Tools Viewer
+
+Click **"Connected (38 tools)"** to see:
+- MCP server status
+- Host and port
+- Complete list of 38 NIST CSF tools
+- Tool descriptions
+
+---
 
 ## Troubleshooting
 
-### "Policy evaluation failed" Error
-- Ensure your Okta user is assigned to the application
-- Check Okta authentication policies
+### "Policy evaluation failed"
+- Assign your Okta user to webapp application
+- Check authentication policies
 
-### "MCP Server Offline" Status
-- Start the MCP HTTP server: `npm run start:http` (from parent directory)
+### "MCP Server Offline"
+- Start MCP: `npm run start:mcp`
+- Check port 8080 is available
 
-### Session Expired
-- Sessions last 24 hours; re-login required after expiry
+### "Token exchange failed"
+- Verify agent has token-exchange grant enabled
+- Check scope `ask-nist-mcp` exists in custom auth server
+- Ensure ID token is from ORG server (not custom)
 
-### Chat Returns 500 Error
-- Verify `LITELLM_KEY` environment variable is set
-- Check LiteLLM proxy is accessible
+### "Invalid audience"
+- Audience must be custom auth server URL
+- Check `CUSTOM_AUTH_SERVER` in .env
+
+### Session expired
+- Sessions last 24 hours
+- Click "Click Here to Log In Again"
+
+### Logout doesn't work
+- Logout now clears both local and Okta SSO session
+- May need to clear browser cookies
+
+---
 
 ## Development
 
 ```bash
-# Run with auto-reload
+# Run webapp with auto-reload
 npm run dev
+
+# Run with logging
+DEBUG=* npm start
+
+# Test ID-JAG exchange
+node test-id-jag.js
 ```
+
+---
 
 ## Security Notes
 
-- Session secret should be changed in production
-- Enable `secure: true` for cookies in production (HTTPS)
-- Client secret should be moved to environment variables in production
-- Tokens are stored in server-side sessions, not client-side
+- ✅ All secrets in environment variables
+- ✅ Private repository recommended
+- ✅ Session secrets should be strong random strings
+- ✅ HTTPS required for production
+- ✅ Private keys never committed to git
+- ✅ ID-JAG tokens validated cryptographically
+- ✅ Full audit trail (user + agent in every request)
+
+---
+
+## Technical Reference
+
+### Environment Variables (Complete List)
+
+```bash
+# LiteLLM
+ANTHROPIC_BASE_URL=https://your-litellm-provider.com
+LITELLM_KEY=your-api-key
+MODEL=claude-4-5-sonnet
+
+# Okta User Authentication
+OKTA_DOMAIN=https://your-org.okta.com
+OKTA_ISSUER=https://your-org.okta.com
+OKTA_CLIENT_ID=YOUR_WEBAPP_CLIENT_ID
+OKTA_CLIENT_SECRET=your-client-secret
+OKTA_REDIRECT_URI=http://localhost:3001/authorization-code/callback
+OKTA_LOGOUT_REDIRECT_URI=http://localhost:3001
+
+# AI Agent Configuration
+AGENT_CLIENT_ID=YOUR_AGENT_ID
+AGENT_NAME=NIST CSF 2.0 AI Agent
+CUSTOM_AUTH_SERVER=https://your-org.okta.com/oauth2/aus...
+MCP_AUDIENCE=api://nist-mcp-server
+MCP_SCOPE=ask-nist-mcp
+AGENT_PRIVATE_KEY_PATH=./agent-keys/agent-private-key.json
+
+# Server
+PORT=3001
+MCP_SERVER_URL=http://localhost:8080
+SESSION_SECRET=change-this-to-random-string
+```
+
+### NPM Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run setup:all` | Install all dependencies (webapp + MCP) |
+| `npm run start:both` | Start both services |
+| `npm run start:mcp` | Start only MCP server |
+| `npm start` | Start only webapp |
+| `npm run dev` | Dev mode with auto-reload |
+
+---
 
 ## License
 
-Part of the NIST CSF 2.0 MCP Server project.
+MIT License. Part of the NIST CSF 2.0 MCP Server project.
+
+---
+
+## References
+
+- [Okta AI Agent Documentation](https://developer.okta.com/docs/guides/ai-agent-token-exchange/)
+- [IETF ID-JAG Spec](https://datatracker.ietf.org/doc/draft-ietf-oauth-identity-assertion-authz-grant/)
+- [RFC 8693 - Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693)
+- [NIST CSF 2.0](https://www.nist.gov/cyberframework)
