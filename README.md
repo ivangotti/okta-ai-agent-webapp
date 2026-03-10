@@ -71,15 +71,16 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 
 ```
 1. User logs in → Gets ID Token
-2. Agent exchanges ID Token → Gets ID-JAG Token
-3. User asks question → Sent to Claude AI
-4. Claude decides → "I need MCP data"
-5. Agent calls MCP with ID-JAG → Gets NIST data
-6. MCP validates ID-JAG → Returns data
-7. Claude synthesizes answer from MCP data → User sees response
+2. Agent exchanges ID Token → Gets ID-JAG Token (ORG server)
+3. Agent exchanges ID-JAG → Gets Access Token (Custom server)
+4. User asks question → Sent to Claude AI
+5. Claude decides → "I need MCP data"
+6. Agent calls MCP with Access Token → Gets NIST data
+7. MCP validates Access Token with Custom JWKS → Returns data
+8. Claude synthesizes answer from MCP data → User sees response
 ```
 
-### Three Steps in Detail
+### Complete Token Chain (4 Steps)
 
 #### Step 1: User Authentication 👤
 
@@ -140,12 +141,58 @@ client_assertion={JWT signed with agent's private key}
 
 ---
 
-#### Step 3: Call MCP Server 🔧
+#### Step 3: Exchange ID-JAG for Access Token 🔑
+
+- **Client:** AI Agent (`YOUR_AGENT_ID`)
+- **Server:** Custom Authorization Server
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER/v1/token`
+- **Grant:** `urn:ietf:params:oauth:grant-type:jwt-bearer`
+- **Auth:** `private_key_jwt` (RS256)
+
+**Request to Custom Server:**
+```javascript
+POST /oauth2/YOUR_CUSTOM_AUTH_SERVER/v1/token
+
+grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
+client_id=YOUR_AGENT_ID
+assertion={ID-JAG Token}
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={Fresh signed JWT for Custom Server}
+// NO scope parameter - scope inherited from ID-JAG
+```
+
+**Custom Server returns Access Token:**
+```json
+{
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "access_token": "eyJhbGc...",
+  "scope": "ask-nist-mcp"
+}
+```
+
+**Access Token Claims:**
+```json
+{
+  "iss": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER",
+  "aud": "api://nist-mcp-server",
+  "sub": "user@example.com",
+  "cid": "YOUR_AGENT_ID",
+  "scp": ["ask-nist-mcp"],
+  "uid": "USER_ID_FROM_OKTA"
+}
+```
+
+⚠️ **Critical:** Do NOT include `scope` parameter in jwt-bearer request - scope comes from ID-JAG
+
+---
+
+#### Step 4: Call MCP Server 🔧
 
 - **Agent → MCP Server**
-- **Authorization:** `Bearer {ID-JAG Token}`
-- **MCP validates:** Calls Okta JWKS, verifies signature, checks claims
-- **MCP knows:** User ID (`sub`) + Agent ID (`client_id`)
+- **Authorization:** `Bearer {MCP Access Token}`
+- **MCP validates:** Calls Custom Server JWKS, verifies signature, checks claims
+- **MCP knows:** User ID (`sub`/`uid`) + Agent ID (`cid`) + Scopes (`scp`)
 
 ---
 
