@@ -72,8 +72,11 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 ```
 1. User logs in → Gets ID Token
 2. Agent exchanges ID Token → Gets ID-JAG Token
-3. Agent calls MCP with ID-JAG → Gets data
-4. Claude synthesizes answer → User sees response
+3. User asks question → Sent to Claude AI
+4. Claude decides → "I need MCP data"
+5. Agent calls MCP with ID-JAG → Gets NIST data
+6. MCP validates ID-JAG → Returns data
+7. Claude synthesizes answer from MCP data → User sees response
 ```
 
 ### Three Steps in Detail
