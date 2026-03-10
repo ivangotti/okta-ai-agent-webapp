@@ -1,4 +1,4 @@
-# NIST CSF 2.0 Chatbot Web Application
+# NIST CSF 2.0 AI Chatbot Web Application
 
 > ⚠️ **EXPERIMENTAL CODE - NOT FOR PRODUCTION USE**
 >
