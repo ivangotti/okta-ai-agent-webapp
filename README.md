@@ -619,3 +619,13 @@ This project is for educational and demonstration purposes. The NIST Cybersecuri
 - [IETF ID-JAG Spec](https://datatracker.ietf.org/doc/draft-ietf-oauth-identity-assertion-authz-grant/)
 - [RFC 8693 - Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693)
 - [NIST CSF 2.0](https://www.nist.gov/cyberframework)
+
+---
+
+## Author
+
+**Ivan Gotti**
+- Email: ivangotti@gmail.com
+- GitHub: [@ivangotti](https://github.com/ivangotti)
+
+Built with assistance from Claude (Anthropic).
