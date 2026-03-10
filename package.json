@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "start:mcp": "cd mcp-server && npm run start:http",
+    "start:both": "concurrently \"npm run start:mcp\" \"npm start\"",
+    "setup:mcp": "cd mcp-server && npm install && npm run build && npm run import:csf-framework && npm run seed:questions",
+    "setup:all": "npm install && npm run setup:mcp"
   },
   "dependencies": {
     "cors": "^2.8.5",

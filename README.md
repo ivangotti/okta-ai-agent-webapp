@@ -6,6 +6,28 @@
 
 A secure, Okta-protected web chatbot for interacting with the NIST Cybersecurity Framework 2.0 via AI.
 
+**This repository includes:**
+- 🤖 AI Agent Webapp (main directory)
+- 🔧 NIST CSF 2.0 MCP Server (`mcp-server/` directory)
+
+## Quick Start
+
+```bash
+# 1. Setup everything (first time only)
+npm run setup:all
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env with your Okta and LiteLLM credentials
+
+# 3. Start both services
+npm run start:both
+```
+
+**Access:**
+- Webapp: http://localhost:3001
+- MCP Server: http://localhost:8080
+
 ## Overview
 
 This standalone web application provides a chat interface to interact with the NIST CSF 2.0 framework using Claude AI. It implements **Okta AI Agent Identity** with ID-JAG (Identity Assertion JWT Authorization Grant) token exchange, allowing an AI agent to act on behalf of authenticated users.
@@ -272,9 +294,25 @@ webapp/
 ## Prerequisites
 
 - **Node.js** 20.x or higher
-- **MCP HTTP Server** running on port 8080 (see parent project)
 - **Okta Application** configured for OIDC
 - **LiteLLM API** access with valid API key
+
+## Project Structure
+
+```
+okta-ai-agent-webapp/
+├── server.js              # Express server with Okta auth
+├── public/                # Frontend UI
+├── package.json           # Webapp dependencies
+├── .env                   # Configuration (not in git)
+├── README.md              # This file
+└── mcp-server/            # NIST CSF 2.0 MCP Server
+    ├── src/               # TypeScript source
+    ├── data/              # Framework data
+    ├── scripts/           # Build scripts
+    ├── package.json       # MCP dependencies
+    └── README.md          # MCP server docs
+```
 
 ## Configuration
 
