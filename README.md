@@ -1,5 +1,9 @@
 # NIST CSF 2.0 Chatbot Web Application
 
+> ⚠️ **EXPERIMENTAL CODE - NOT FOR PRODUCTION USE**
+>
+> This is a prototype implementation demonstrating Okta AI Agent authentication with ID-JAG token exchange. It is intended for learning, testing, and development purposes only. Do not deploy to production environments without proper security review, hardening, and compliance validation.
+
 A secure, Okta-protected web chatbot for interacting with the NIST Cybersecurity Framework 2.0 via AI.
 
 ## Overview
