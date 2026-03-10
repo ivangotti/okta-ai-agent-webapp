@@ -690,53 +690,125 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// Chat endpoint
+// Get MCP tools in Anthropic format
+async function getMcpToolsForClaude() {
+  try {
+    const response = await fetch(`${MCP_SERVER_URL}/api/tools`);
+    if (!response.ok) return [];
+
+    const data = await response.json();
+
+    // Convert simple tool list to full tool definitions
+    // For now, return a subset of most useful tools
+    const toolDefinitions = [
+      {
+        name: 'csf_lookup',
+        description: 'Look up NIST CSF elements by identifier (function, category, or subcategory ID)',
+        input_schema: {
+          type: 'object',
+          properties: {
+            identifier: { type: 'string', description: 'CSF identifier (e.g., GV, PR.AA, DE.CM-01)' }
+          },
+          required: ['identifier']
+        }
+      },
+      {
+        name: 'search_framework',
+        description: 'Search the NIST CSF framework for keywords or concepts',
+        input_schema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query or keyword' }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'get_assessment_questions',
+        description: 'Get assessment questions for a specific subcategory',
+        input_schema: {
+          type: 'object',
+          properties: {
+            subcategory_id: { type: 'string', description: 'Subcategory ID (e.g., GV.OC-01)' }
+          },
+          required: ['subcategory_id']
+        }
+      }
+    ];
+
+    return toolDefinitions;
+  } catch (error) {
+    console.error('Failed to get MCP tools:', error);
+    return [];
+  }
+}
+
+// Execute MCP tool with ID-JAG token
+async function executeMcpTool(toolName, toolInput, idJagToken) {
+  try {
+    console.log(`Executing MCP tool: ${toolName}`);
+
+    const response = await fetch(`${MCP_SERVER_URL}/api/tools/${toolName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idJagToken}`  // Use ID-JAG token!
+      },
+      body: JSON.stringify(toolInput)
+    });
+
+    const result = await response.json();
+    console.log(`Tool ${toolName} completed:`, result.success ? 'SUCCESS' : 'FAILED');
+
+    return result;
+  } catch (error) {
+    console.error(`Tool ${toolName} error:`, error);
+    return { error: error.message };
+  }
+}
+
+// Chat endpoint with MCP tool support
 app.post('/api/chat', ensureAuthenticated, async (req, res) => {
   try {
     const { messages } = req.body;
     const user = req.user;
 
-    // Get agent token for context
-    let agentContext = '';
+    console.log(`\n=== Chat Request from ${user.email} ===`);
+
+    // Get ID-JAG token for MCP calls
+    let idJagToken = null;
     try {
-      const agentToken = await getAgentAccessToken();
-      agentContext = `\n\nYou are operating as the "${AGENT_NAME}" with your own Okta identity (client_id: ${AGENT_CLIENT_ID}).
-You have your own access token that you can use to make authenticated API calls on behalf of yourself.`;
+      const token = await getIdJagToken(user.idToken, user.accessToken, user.id);
+      idJagToken = token.accessToken;
+      console.log('ID-JAG token obtained for MCP calls');
     } catch (e) {
-      agentContext = '\n\n(Agent token not available)';
+      console.error('Failed to get ID-JAG token:', e.message);
     }
 
-    // System prompt with agent identity
-    const systemPrompt = `You are the ${AGENT_NAME}, an AI Agent with your own identity in Okta.
+    // Get MCP tools
+    const tools = await getMcpToolsForClaude();
+    console.log(`Loaded ${tools.length} MCP tools for Claude`);
 
-AGENT IDENTITY:
-- Agent Name: ${AGENT_NAME}
-- Agent Client ID: ${AGENT_CLIENT_ID}
-- Authentication: private_key_jwt (RS256)
-- You can authenticate to APIs using your own access token
-${agentContext}
+    // System prompt
+    const systemPrompt = `You are the ${AGENT_NAME}, an AI Agent helping ${user.displayName || user.email}.
 
-CURRENT USER (who you're helping):
-- Name: ${user.displayName || user.email}
-- The user authenticated via Okta SSO
-- You have access to their ID token and access token
+You have access to ${tools.length} MCP tools to query the NIST Cybersecurity Framework 2.0 database:
+- csf_lookup: Look up specific framework elements
+- search_framework: Search for keywords and concepts
+- get_assessment_questions: Get assessment questions for subcategories
 
-CAPABILITIES:
-- You have access to an MCP server with 38 tools for querying the NIST CSF 2.0 database
-- The 6 core functions: GOVERN (GV), IDENTIFY (ID), PROTECT (PR), DETECT (DE), RESPOND (RS), RECOVER (RC)
-- 34 categories and 185 subcategories
-- Assessment questions and implementation guidance
-
-Be helpful and provide detailed answers about cybersecurity framework topics. When discussing authentication or tokens, you can explain the dual-token architecture (user tokens for inbound auth, agent tokens for outbound API calls).`;
+Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
 
     const requestBody = {
       model: MODEL,
       max_tokens: 4096,
       system: systemPrompt,
-      messages: messages
+      messages: messages,
+      tools: tools.length > 0 ? tools : undefined
     };
 
-    const response = await fetch(`${LITELLM_BASE_URL}/v1/messages`, {
+    console.log('Calling Claude...');
+    let response = await fetch(`${LITELLM_BASE_URL}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -751,8 +823,68 @@ Be helpful and provide detailed answers about cybersecurity framework topics. Wh
       throw new Error(`LiteLLM error: ${response.status} - ${error}`);
     }
 
-    const result = await response.json();
+    let result = await response.json();
+
+    // Handle tool use loop
+    let iteration = 0;
+    const maxIterations = 5;
+
+    while (result.stop_reason === 'tool_use' && iteration < maxIterations) {
+      iteration++;
+      console.log(`\n--- Tool Use Iteration ${iteration} ---`);
+
+      const toolUseBlocks = result.content.filter(b => b.type === 'tool_use');
+      console.log(`Claude wants to use ${toolUseBlocks.length} tool(s)`);
+
+      const toolResults = [];
+
+      for (const toolUse of toolUseBlocks) {
+        console.log(`  Tool: ${toolUse.name}`);
+        console.log(`  Input:`, JSON.stringify(toolUse.input));
+
+        const toolResult = await executeMcpTool(toolUse.name, toolUse.input, idJagToken);
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify(toolResult)
+        });
+      }
+
+      // Continue conversation with tool results
+      messages.push(
+        { role: 'assistant', content: result.content },
+        { role: 'user', content: toolResults }
+      );
+
+      console.log('Sending tool results back to Claude...');
+      response = await fetch(`${LITELLM_BASE_URL}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': LITELLM_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: messages,
+          tools: tools
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`LiteLLM error: ${response.status} - ${error}`);
+      }
+
+      result = await response.json();
+    }
+
+    console.log('Chat completed after', iteration, 'tool iterations\n');
     res.json(result);
+
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: error.message });
