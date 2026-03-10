@@ -667,11 +667,28 @@
 
       return `
         <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px; border-left: 4px solid #3b82f6;">
-          <h3 style="color: #60a5fa; margin-bottom: 0.5rem; font-size: 0.9rem;">Okta AI Agent Token Architecture</h3>
-          <div style="font-size: 0.8rem; color: #94a3b8; font-family: monospace;">
-            <div>1. User → Okta SSO → <span style="color: #4ade80;">User Tokens</span> (Inbound)</div>
-            <div>2. Agent + User ID Token → Okta → <span style="color: #f59e0b;">ID-JAG Token</span> (Token Exchange)</div>
-            <div>3. Agent + ID-JAG Token → MCP Server (Outbound on behalf of user)</div>
+          <h3 style="color: #60a5fa; margin-bottom: 0.75rem; font-size: 0.9rem;">Okta AI Agent Token Architecture</h3>
+          <div style="font-size: 0.75rem; color: #94a3b8; font-family: monospace; line-height: 1.6;">
+            <div style="margin-bottom: 0.5rem;">
+              <strong style="color: #4ade80;">Step 1: User Authentication (Inbound)</strong><br>
+              • Client ID: ${agentTokens?.user?.id ? 'YOUR_WEBAPP_CLIENT_ID' : 'N/A'}<br>
+              • Auth Server: ORG (/oauth2/v1/authorize)<br>
+              • Result: <span style="color: #4ade80;">User ID Token + Access Token</span>
+            </div>
+            <div style="margin-bottom: 0.5rem;">
+              <strong style="color: #f59e0b;">Step 2: ID-JAG Token Exchange</strong><br>
+              • Client ID: ${agentTokens?.agent?.clientId || 'YOUR_AGENT_ID'} (AI Agent)<br>
+              • Auth Server: ORG (/oauth2/v1/token)<br>
+              • Subject: User's ID Token<br>
+              • Auth Method: private_key_jwt (RS256)<br>
+              • Result: <span style="color: #f59e0b;">ID-JAG Token</span>
+            </div>
+            <div>
+              <strong style="color: #60a5fa;">Step 3: Call MCP Server (Outbound)</strong><br>
+              • Agent uses ID-JAG Token<br>
+              • MCP Server: localhost:8080<br>
+              • Authorization: Bearer {ID-JAG}
+            </div>
           </div>
         </div>
 
