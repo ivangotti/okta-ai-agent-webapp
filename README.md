@@ -321,39 +321,6 @@ Open **http://localhost:3001** in your browser. You'll be redirected to Okta for
 | `/api/chat` | POST | Required | Sends messages to Claude AI |
 | `/api/tools` | GET | Required | Lists available MCP tools |
 
-## Authentication Flow
-
-```
-┌────────┐     ┌────────┐     ┌────────┐     ┌────────┐
-│  User  │     │ Webapp │     │  Okta  │     │ Claude │
-└───┬────┘     └───┬────┘     └───┬────┘     └───┬────┘
-    │              │              │              │
-    │─── GET / ───▶│              │              │
-    │              │              │              │
-    │◀─ 302 /login─│              │              │
-    │              │              │              │
-    │─ GET /login ▶│              │              │
-    │              │─ Auth Req ──▶│              │
-    │              │              │              │
-    │◀───────── 302 to Okta ──────│              │
-    │              │              │              │
-    │────── Enter Credentials ───▶│              │
-    │              │              │              │
-    │◀─ 302 /callback?code=xxx ───│              │
-    │              │              │              │
-    │─ GET /callback ▶            │              │
-    │              │─ Token Req ─▶│              │
-    │              │◀─ Tokens ────│              │
-    │              │              │              │
-    │◀─ 302 / + Session Cookie ───│              │
-    │              │              │              │
-    │─── Chat Message ───────────▶│              │
-    │              │─────────────────────────────▶│
-    │              │◀────────────────────────────│
-    │◀─── AI Response ───────────│              │
-    │              │              │              │
-```
-
 ## Token Inspection
 
 Click on your username in the header to view:
