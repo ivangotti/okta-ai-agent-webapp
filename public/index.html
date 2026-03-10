@@ -669,25 +669,28 @@
         <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px; border-left: 4px solid #3b82f6;">
           <h3 style="color: #60a5fa; margin-bottom: 0.75rem; font-size: 0.9rem;">Okta AI Agent Token Architecture</h3>
           <div style="font-size: 0.75rem; color: #94a3b8; font-family: monospace; line-height: 1.6;">
-            <div style="margin-bottom: 0.5rem;">
+            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
               <strong style="color: #4ade80;">Step 1: User Authentication (Inbound)</strong><br>
-              • Client ID: ${agentTokens?.user?.id ? 'YOUR_WEBAPP_CLIENT_ID' : 'N/A'}<br>
-              • Auth Server: ORG (/oauth2/v1/authorize)<br>
+              • Client ID: <code style="color: #4ade80;">${agentTokens?.webappClientId || 'YOUR_WEBAPP_CLIENT_ID'}</code><br>
+              • Auth Server: <code>${agentTokens?.orgAuthServer || 'ORG'}/authorize</code><br>
+              • Grant: authorization_code<br>
               • Result: <span style="color: #4ade80;">User ID Token + Access Token</span>
             </div>
-            <div style="margin-bottom: 0.5rem;">
+            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
               <strong style="color: #f59e0b;">Step 2: ID-JAG Token Exchange</strong><br>
-              • Client ID: ${agentTokens?.agent?.clientId || 'YOUR_AGENT_ID'} (AI Agent)<br>
-              • Auth Server: ORG (/oauth2/v1/token)<br>
+              • Client ID: <code style="color: #f59e0b;">${agentTokens?.agent?.clientId || 'YOUR_AGENT_ID'}</code> (AI Agent)<br>
+              • Auth Server: <code>${agentTokens?.orgAuthServer || 'ORG'}/token</code><br>
+              • Grant: token-exchange<br>
               • Subject: User's ID Token<br>
-              • Auth Method: private_key_jwt (RS256)<br>
+              • Auth: private_key_jwt (RS256)<br>
+              • Audience: <code style="font-size: 0.7rem;">${agentTokens?.customAuthServer || 'Custom Server'}</code><br>
               • Result: <span style="color: #f59e0b;">ID-JAG Token</span>
             </div>
-            <div>
+            <div style="padding: 0.5rem; background: #1e293b; border-radius: 4px;">
               <strong style="color: #60a5fa;">Step 3: Call MCP Server (Outbound)</strong><br>
               • Agent uses ID-JAG Token<br>
               • MCP Server: localhost:8080<br>
-              • Authorization: Bearer {ID-JAG}
+              • Authorization: Bearer {ID-JAG Token}
             </div>
           </div>
         </div>

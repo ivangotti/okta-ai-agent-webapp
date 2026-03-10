@@ -601,6 +601,9 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
         clientId: AGENT_CLIENT_ID,
         authMethod: 'Agent ID Assertion (private_key_jwt + token_exchange)'
       },
+      webappClientId: OKTA_CLIENT_ID,  // Add webapp client ID
+      orgAuthServer: `${OKTA_DOMAIN}/oauth2/v1`,  // Add ORG server
+      customAuthServer: CUSTOM_AUTH_SERVER,  // Add custom server
       idJagToken: {
         description: 'ID-JAG token from token exchange',
         raw: idJagToken.accessToken,
