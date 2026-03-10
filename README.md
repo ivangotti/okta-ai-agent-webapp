@@ -10,6 +10,8 @@ An Okta-protected AI chatbot that uses **Okta AI Agent Identity** with **ID-JAG 
 - 🤖 AI Agent Webapp (main directory)
 - 🔧 NIST CSF 2.0 MCP Server (`mcp-server/` directory)
 
+> 📋 **Note on MCP Server:** This repository includes an open-source implementation of the NIST Cybersecurity Framework 2.0 MCP (Model Context Protocol) server. The MCP server code is based on the open-source project available at [github.com/rocklambros/nist-csf-2-mcp-server](https://github.com/rocklambros/nist-csf-2-mcp-server). It is included here for convenience and demonstration purposes. The NIST Cybersecurity Framework is a public framework published by NIST, and this implementation provides programmatic access to the framework data for educational and development purposes.
+
 ---
 
 ## Quick Start
@@ -593,7 +595,15 @@ SESSION_SECRET=change-this-to-random-string
 
 ## License
 
-MIT License. Part of the NIST CSF 2.0 MCP Server project.
+MIT License.
+
+### Attributions
+
+- **AI Agent Webapp:** Original implementation demonstrating Okta AI Agent authentication
+- **NIST CSF 2.0 MCP Server:** Based on the open-source project by [rocklambros/nist-csf-2-mcp-server](https://github.com/rocklambros/nist-csf-2-mcp-server)
+- **NIST Cybersecurity Framework:** Public framework published by [NIST](https://www.nist.gov/cyberframework)
+
+This project is for educational and demonstration purposes. The NIST Cybersecurity Framework data is publicly available and this implementation provides programmatic access following the Model Context Protocol (MCP) specification.
 
 ---
 
