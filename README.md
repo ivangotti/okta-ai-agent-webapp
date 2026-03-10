@@ -23,88 +23,90 @@ This application uses a sophisticated **dual-identity token flow** combining use
 
 ### Complete Token Flow (Step-by-Step)
 
+#### STEP 1: User Authentication (Inbound)
+
+**Client:** Webapp (`YOUR_WEBAPP_CLIENT_ID`)
+**Server:** ORG Authorization Server
+**Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/authorize`
+**Grant:** `authorization_code`
+**Result:** User ID Token + Access Token
+
+**User ID Token Claims:**
+```json
+{
+  "iss": "https://your-okta-domain.okta.com",
+  "aud": "YOUR_WEBAPP_CLIENT_ID",
+  "sub": "USER_ID_FROM_OKTA",
+  "email": "user@example.com",
+  "name": "User Name"
+}
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ STEP 1: User Authentication (Inbound)                                        │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                               │
-│ Client:   Webapp (YOUR_WEBAPP_CLIENT_ID)                                     │
-│ Server:   ORG Authorization Server                                           │
-│ Endpoint: https://your-okta-domain.okta.com/oauth2/v1/authorize             │
-│ Grant:    authorization_code                                                 │
-│ Result:   User ID Token + Access Token                                       │
-│                                                                               │
-│ User ID Token Claims:                                                        │
-│   iss: "https://your-okta-domain.okta.com"                                  │
-│   aud: "YOUR_WEBAPP_CLIENT_ID"                                               │
-│   sub: "USER_ID_FROM_OKTA"  (Okta user ID)                                  │
-│   email: "user@example.com"                                                  │
-│   name: "User Name"                                                          │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                       ↓
-                                 User ID Token
-                                       ↓
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ STEP 2: ID-JAG Token Exchange (Agent Identity Assertion)                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                               │
-│ Client:   AI Agent (YOUR_AGENT_ID)                                           │
-│ Server:   ORG Authorization Server                                           │
-│ Endpoint: https://your-okta-domain.okta.com/oauth2/v1/token                 │
-│ Grant:    urn:ietf:params:oauth:grant-type:token-exchange                   │
-│ Auth:     private_key_jwt (RS256)                                            │
-│                                                                               │
-│ Request Parameters:                                                           │
-│   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"             │
-│   requested_token_type: "urn:ietf:params:oauth:token-type:id-jag"           │
-│   subject_token: {User's ID Token}                                           │
-│   subject_token_type: "urn:ietf:params:oauth:token-type:id_token"           │
-│   audience: "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_..."      │
-│   scope: "ask-nist-mcp"                                                      │
-│   client_id: "YOUR_AGENT_ID"                                                 │
-│   client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:..."  │
-│   client_assertion: {JWT signed with agent's private key}                    │
-│                                                                               │
-│ Result: ID-JAG Token (oauth-id-jag+jwt)                                      │
-│                                                                               │
-│ ID-JAG Token Claims (Dual Identity):                                         │
-│   typ: "oauth-id-jag+jwt"                                                    │
-│   iss: "https://your-okta-domain.okta.com"                                  │
-│   aud: "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_..."           │
-│                                                                               │
-│   sub: "USER_ID_FROM_OKTA"          ← Okta User ID (who needs help)         │
-│   client_id: "YOUR_AGENT_ID"        ← AI Agent ID (who is acting)           │
-│                                                                               │
-│   scope: "ask-nist-mcp"                                                      │
-│   jti: "IDAAG.MUJyYv54I3poALLV3lwKA6uw3P51mWXhTO7VYFrbG_A"                   │
-│                                                                               │
-│   💡 KEY: The ID-JAG encodes BOTH identities in a single token:              │
-│      • "sub" claim = Okta user ID (the person being helped)                  │
-│      • "client_id" claim = AI agent ID (the agent doing the work)            │
-│      This enables full audit trails and fine-grained access policies.        │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                       ↓
-                                 ID-JAG Token
-                                       ↓
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ STEP 3: Call MCP Server (Outbound)                                           │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                               │
-│ Agent → MCP Server                                                           │
-│ Authorization: Bearer {ID-JAG Token}                                         │
-│                                                                               │
-│ MCP server validates:                                                        │
-│   - Token signature (from ORG server's JWKS)                                 │
-│   - Token audience matches its auth server                                   │
-│   - Scope includes required permissions                                      │
-│   - Token not expired                                                        │
-│                                                                               │
-│ MCP knows:                                                                   │
-│   - User identity from "sub" claim                                           │
-│   - Agent identity from "client_id" claim                                    │
-│   - Granted scopes from "scope" claim                                        │
-└──────────────────────────────────────────────────────────────────────────────┘
+
+⬇️ **User ID Token** ⬇️
+
+---
+
+#### STEP 2: ID-JAG Token Exchange (Agent Identity Assertion)
+
+**Client:** AI Agent (`YOUR_AGENT_ID`)
+**Server:** ORG Authorization Server
+**Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
+**Grant:** `urn:ietf:params:oauth:grant-type:token-exchange`
+**Auth:** `private_key_jwt` (RS256)
+
+**Request Parameters:**
 ```
+grant_type: urn:ietf:params:oauth:grant-type:token-exchange
+requested_token_type: urn:ietf:params:oauth:token-type:id-jag
+subject_token: {User's ID Token}
+subject_token_type: urn:ietf:params:oauth:token-type:id_token
+audience: https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
+scope: ask-nist-mcp
+client_id: YOUR_AGENT_ID
+client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion: {JWT signed with agent's private key}
+```
+
+**Result:** ID-JAG Token
+
+**ID-JAG Token Claims (Dual Identity):**
+```json
+{
+  "typ": "oauth-id-jag+jwt",
+  "iss": "https://your-okta-domain.okta.com",
+  "aud": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID",
+  "sub": "USER_ID_FROM_OKTA",         // ← Okta User ID (who needs help)
+  "client_id": "YOUR_AGENT_ID",       // ← AI Agent ID (who is acting)
+  "scope": "ask-nist-mcp",
+  "jti": "IDAAG.MUJyYv54I3poALLV3lwKA6uw3P51mWXhTO7VYFrbG_A"
+}
+```
+
+💡 **KEY:** The ID-JAG encodes BOTH identities:
+- **`sub` claim** = Okta user ID (the person being helped)
+- **`client_id` claim** = AI agent ID (the agent doing the work)
+
+This enables full audit trails and fine-grained access policies.
+
+⬇️ **ID-JAG Token** ⬇️
+
+---
+
+#### STEP 3: Call MCP Server (Outbound)
+
+**Agent → MCP Server**
+**Authorization:** `Bearer {ID-JAG Token}`
+
+**MCP server validates:**
+- Token signature (from ORG server's JWKS)
+- Token audience matches its auth server
+- Scope includes required permissions
+- Token not expired
+
+**MCP knows:**
+- User identity from `sub` claim
+- Agent identity from `client_id` claim
+- Granted scopes from `scope` claim
 
 ### When to Use Which Server
 
@@ -131,62 +133,113 @@ This application uses a sophisticated **dual-identity token flow** combining use
 4. **Scope must be defined in custom server** - But requested during ORG exchange
 5. **Agent uses JWT Bearer assertion** - Not client_secret
 
+### Complete Token Flow (Step-by-Step)
+
+#### STEP 1: User Authentication (Inbound)
+
+- **Client:** Webapp (`YOUR_WEBAPP_CLIENT_ID`)
+- **Server:** ORG Authorization Server
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/authorize`
+- **Grant:** `authorization_code`
+- **Result:** User ID Token + Access Token
+
+**User ID Token Claims:**
+```json
+{
+  "iss": "https://your-okta-domain.okta.com",
+  "aud": "YOUR_WEBAPP_CLIENT_ID",
+  "sub": "USER_ID_FROM_OKTA",
+  "email": "user@example.com",
+  "name": "User Name"
+}
+```
+
+⬇️ **User ID Token flows to Agent** ⬇️
+
+---
+
+#### STEP 2: ID-JAG Token Exchange (Agent Identity Assertion)
+
+- **Client:** AI Agent (`YOUR_AGENT_ID`)
+- **Server:** ORG Authorization Server
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
+- **Grant:** `urn:ietf:params:oauth:grant-type:token-exchange`
+- **Auth:** `private_key_jwt` (RS256)
+
+**Request Parameters:**
+```
+grant_type: urn:ietf:params:oauth:grant-type:token-exchange
+requested_token_type: urn:ietf:params:oauth:token-type:id-jag
+subject_token: {User's ID Token}
+subject_token_type: urn:ietf:params:oauth:token-type:id_token
+audience: https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
+scope: ask-nist-mcp
+client_id: YOUR_AGENT_ID
+client_assertion_type: urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion: {JWT signed with agent's private key}
+```
+
+**ID-JAG Token Claims (Dual Identity):**
+```json
+{
+  "typ": "oauth-id-jag+jwt",
+  "iss": "https://your-okta-domain.okta.com",
+  "aud": "https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID",
+  "sub": "USER_ID_FROM_OKTA",         // ← Okta User ID (who needs help)
+  "client_id": "YOUR_AGENT_ID",       // ← AI Agent ID (who is acting)
+  "scope": "ask-nist-mcp",
+  "jti": "IDAAG...."
+}
+```
+
+💡 **KEY:** The ID-JAG encodes BOTH identities:
+- **`sub` claim** = Okta user ID (the person being helped)
+- **`client_id` claim** = AI agent ID (the agent doing the work)
+
+⬇️ **ID-JAG Token flows to MCP Server** ⬇️
+
+---
+
+#### STEP 3: Call MCP Server (Outbound)
+
+- **Agent → MCP Server**
+- **Authorization:** `Bearer {ID-JAG Token}`
+
+**MCP server validates:**
+- Token signature (from ORG server's JWKS)
+- Token audience matches its auth server
+- Scope includes required permissions
+- Token not expired
+
+**MCP extracts:**
+- User identity from `sub` claim
+- Agent identity from `client_id` claim
+- Granted scopes from `scope` claim
+
+---
+
 ## Architecture
 
+**Component Flow:**
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                      WEBAPP (This Project)                                │
-│                         localhost:3001                                    │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                           │
-│  ┌─────────────┐    ┌──────────────────┐    ┌──────────────────┐        │
-│  │ Web Browser │───▶│ Express Server   │───▶│ AI Agent Module  │        │
-│  │             │    │                  │    │                  │        │
-│  │ - Chat UI   │    │ - Session Mgmt   │    │ - Token Exchange │        │
-│  │ - Tokens    │    │ - Client ID:     │    │ - Agent ID:      │        │
-│  │             │    │   YOUR_WEBAPP... │    │   YOUR_AGENT...  │        │
-│  └─────────────┘    └────────┬─────────┘    │ - Private Key    │        │
-│                               │              └──────────────────┘        │
-│                ┌──────────────┴──────────────┐                           │
-│                │                             │                            │
-│                ▼                             ▼                            │
-│      ┌──────────────────┐         ┌──────────────────┐                   │
-│      │   LiteLLM API    │         │  MCP HTTP API    │                   │
-│      │                  │         │                  │                   │
-│      │  Claude Sonnet   │         │  38 NIST Tools   │                   │
-│      │  your-litellm... │         │  localhost:8080  │                   │
-│      └──────────────────┘         └──────────────────┘                   │
-│                                                                           │
-└──────────────────────────────────────────────────────────────────────────┘
-                              │
-                              │ OAuth 2.0 / OIDC + ID-JAG
-                              │
-          ┌───────────────────┴───────────────────┐
-          │                                       │
-          ▼                                       ▼
-┌──────────────────────────┐        ┌──────────────────────────┐
-│ Okta ORG Auth Server     │        │ Okta Custom Auth Server  │
-│                          │        │                          │
-│ your-okta-domain.okta    │        │ .../oauth2/YOUR_CUSTOM   │
-│ .com/oauth2/v1           │        │                          │
-│                          │        │ Purpose:                 │
-│ Used for:                │        │ - Audience definition    │
-│ ──────────────────────   │        │ - Scope: ask-nist-mcp    │
-│ 1. User Login            │        │ - API: api://nist-mcp    │
-│    Client: YOUR_WEBAPP..│        │                          │
-│    → ID Token            │        │ NOT used for:            │
-│    → Access Token        │        │ - User authentication    │
-│                          │        │ - Token exchange         │
-│ 2. ID-JAG Exchange       │        │                          │
-│    Agent: YOUR_AGENT...  │        │ (Only target audience)   │
-│    Subject: User ID Token│        │                          │
-│    → ID-JAG Token        │        └──────────────────────────┘
-│                          │
-│ 3. Token Validation      │
-│    JWKS: /oauth2/v1/keys │
-│                          │
-└──────────────────────────┘
+Web Browser → Express Server → AI Agent Module
+    ↓              ↓                   ↓
+Chat UI      Session Mgmt      Token Exchange
+             Client ID:        Agent ID:
+             YOUR_WEBAPP...    YOUR_AGENT...
+                   ↓                   ↓
+            ┌──────┴──────┐     ┌─────┴────┐
+            ↓             ↓     ↓          ↓
+      LiteLLM API    MCP HTTP API    Okta Servers
+      Claude AI      38 NIST Tools   Auth & Exchange
 ```
+
+**Okta Servers:**
+
+| Server | URL | Purpose |
+|--------|-----|---------|
+| **ORG Server** | `your-okta-domain.okta.com/oauth2/v1` | User login, ID-JAG exchange, token validation |
+| **Custom Server** | `your-okta-domain.okta.com/oauth2/YOUR_CUSTOM...` | Audience definition, scope configuration |
 
 ## Features
 
