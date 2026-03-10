@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Agent Keys (sensitive)
+agent-keys/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment (NEVER commit these!)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temp files
+/tmp/
+*.tmp
