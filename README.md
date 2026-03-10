@@ -373,12 +373,12 @@ async function getIdJagToken(userIdToken, userId) {
   // Generate client assertion
   const clientAssertion = generateClientAssertion(
     AGENT_CLIENT_ID,
-    'https://your-okta-domain.okta.com/oauth2/v1/token'
+    'https://your-okta-domain.okta.com/oauth2/v1/token'  // ⚠️ MUST be ORG server
   );
 
   // Token exchange request
   const response = await fetch(
-    'https://your-okta-domain.okta.com/oauth2/v1/token',
+    'https://your-okta-domain.okta.com/oauth2/v1/token',  // ⚠️ MUST be ORG server
     {
       method: 'POST',
       headers: {
@@ -390,7 +390,7 @@ async function getIdJagToken(userIdToken, userId) {
         client_id: AGENT_CLIENT_ID,
         subject_token: userIdToken,
         subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-        audience: CUSTOM_AUTH_SERVER,
+        audience: CUSTOM_AUTH_SERVER,  // Points to custom server (where token will be used)
         scope: 'ask-nist-mcp',
         client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
         client_assertion: clientAssertion
@@ -402,6 +402,12 @@ async function getIdJagToken(userIdToken, userId) {
   return data.access_token;  // ID-JAG token
 }
 ```
+
+**⚠️ Critical:**
+- **Token exchange endpoint MUST be the ORG authorization server** (`/oauth2/v1/token`)
+- **NOT the custom authorization server** (`/oauth2/aus.../v1/token`)
+- The `audience` parameter points to the custom server (target), but the exchange happens at ORG
+- Only the ORG server can issue ID-JAG tokens
 
 **Key Point:** Agent authenticates with **signed JWT** (private key), not client_secret!
 
