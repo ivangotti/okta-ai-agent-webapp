@@ -233,12 +233,15 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
     console.log('\n=== STEP 2: Exchange ID-JAG for Access Token at CUSTOM Server ===');
 
     const customTokenEndpoint = `${CUSTOM_AUTH_SERVER}/v1/token`;
+    const customClientAssertion = generateClientAssertion(AGENT_CLIENT_ID, customTokenEndpoint);
 
     const accessTokenParams = new URLSearchParams({
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
       client_id: AGENT_CLIENT_ID,
       assertion: idJagToken,  // Use ID-JAG as assertion
-      scope: MCP_SCOPE
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: customClientAssertion
+      // Note: NO scope parameter - scope comes from ID-JAG token
     });
 
     console.log('Exchanging ID-JAG at:', customTokenEndpoint);
