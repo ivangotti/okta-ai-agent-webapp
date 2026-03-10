@@ -240,6 +240,65 @@ client_assertion: {JWT signed with agent's private key}
 
 ---
 
+### How MCP Validates ID-JAG Tokens
+
+The MCP server performs cryptographic validation on every request:
+
+#### Validation Steps
+
+1. **Extract Token**
+   - Gets token from `Authorization: Bearer {token}` header
+
+2. **Decode Token** (without verification)
+   - Extracts header: `kid` (key ID), `typ` (token type), `alg` (algorithm)
+   - Extracts claims: `iss`, `aud`, `sub`, `client_id`, `scope`, `exp`
+
+3. **Verify Token Type**
+   - Checks: `typ === "oauth-id-jag+jwt"`
+
+4. **Fetch Okta's Public Keys (JWKS)**
+   - Calls: `https://your-okta-domain.okta.com/oauth2/v1/keys`
+   - Gets RSA public keys for signature verification
+   - Caches for 1 hour (performance)
+
+5. **Find Matching Key**
+   - Matches token's `kid` with JWKS key ID
+
+6. **Verify Cryptographic Signature**
+   - Uses Okta's public key to verify token signature
+   - Proves token was issued by Okta (not forged)
+   - Proves token hasn't been tampered with
+
+7. **Validate Claims**
+   - **Expiration:** `exp` must be in future
+   - **Audience:** Must match MCP's custom auth server
+   - **Issuer:** Must be Okta ORG server
+   - **Scope:** Must include required permissions
+
+8. **Extract Identity**
+   ```typescript
+   req.userId = claims.sub          // "00uporuxeuOkYxp9E0h7"
+   req.agentId = claims.client_id   // "wlp2o86e2kkTN0tuS0h8"
+   ```
+
+9. **Process Request**
+   - MCP now knows WHO (user + agent) is making the request
+   - Enables audit logging and access control
+
+#### Security Benefits
+
+| Check | Purpose |
+|-------|---------|
+| Signature verification | Proves token issued by Okta |
+| Expiration check | Prevents replay with old tokens |
+| Audience validation | Token is for THIS server |
+| Type validation | Ensures ID-JAG format |
+| JWKS from Okta | Real-time key rotation support |
+
+**Result:** Every MCP request is authenticated with dual identity (user + agent) verified by Okta.
+
+---
+
 ## Architecture
 
 **Component Flow:**
