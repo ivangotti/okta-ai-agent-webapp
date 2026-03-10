@@ -273,7 +273,7 @@ The MCP server performs cryptographic validation on every request:
    - **Expiration:** `exp` must be in future
    - **Audience:** Must match MCP's custom auth server
    - **Issuer:** Must be Okta ORG server
-   - **Scope:** Must include required permissions
+   - **Scope:** Must contain `ask-nist-mcp` (rejects if missing)
 
 8. **Extract Identity**
    ```typescript

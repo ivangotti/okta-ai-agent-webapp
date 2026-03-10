@@ -516,8 +516,10 @@ app.get('/session-expired', (req, res) => {
   `);
 });
 
-// Logout route (local session only - no Okta logout call)
+// Logout route - Clear local session and redirect to Okta logout
 app.get('/logout', (req, res, next) => {
+  const idToken = req.user?.idToken;
+
   req.logout((err) => {
     if (err) {
       console.error('Logout error:', err);
@@ -530,8 +532,14 @@ app.get('/logout', (req, res, next) => {
         console.error('Session destroy error:', destroyErr);
       }
 
-      // Redirect to session-expired page with logout message
-      res.redirect('/session-expired?reason=You have been logged out successfully');
+      // If we have an ID token, use Okta logout to clear SSO session
+      if (idToken) {
+        const oktaLogoutUrl = `${OKTA_DOMAIN}/oauth2/v1/logout?id_token_hint=${idToken}&post_logout_redirect_uri=${encodeURIComponent(OKTA_LOGOUT_REDIRECT_URI + '/session-expired?reason=You have been logged out successfully')}`;
+        res.redirect(oktaLogoutUrl);
+      } else {
+        // Fallback to local logout
+        res.redirect('/session-expired?reason=You have been logged out successfully');
+      }
     });
   });
 });
