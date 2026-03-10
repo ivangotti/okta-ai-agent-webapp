@@ -793,6 +793,8 @@
         const health = await healthRes.json();
         const tools = toolsRes.ok ? await toolsRes.json() : { tools: [] };
 
+        const mcpUrl = new URL(window.location.origin.replace('3001', '8080'));
+
         modalBody.innerHTML = `
           <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px;">
             <h3 style="color: #4ade80; margin-bottom: 0.75rem;">MCP Server Status</h3>
@@ -801,6 +803,9 @@
               <div><strong>Tools:</strong> ${health.mcp?.tools_available || 0}</div>
               <div><strong>Version:</strong> ${health.mcp?.version || 'N/A'}</div>
               <div><strong>Mode:</strong> ${health.mcp?.mode || 'N/A'}</div>
+              <div><strong>Host:</strong> ${mcpUrl.hostname}</div>
+              <div><strong>Port:</strong> ${mcpUrl.port}</div>
+              <div style="grid-column: 1 / -1;"><strong>URL:</strong> <a href="${mcpUrl.href}" target="_blank" style="color: #60a5fa;">${mcpUrl.href}</a></div>
             </div>
           </div>
 
