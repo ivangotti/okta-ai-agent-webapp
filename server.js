@@ -284,13 +284,21 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
     return result;
   } catch (error) {
     console.error('Failed to get MCP access token:', error);
-    return generateLocalIdJagToken(userIdToken, userId);
+
+    // Return error state instead of fallback
+    return {
+      error: true,
+      errorMessage: error.message,
+      errorStep: error.message.includes('ID-JAG') ? 'step1' : 'step2',
+      accessToken: null,
+      idJagToken: null
+    };
   }
 }
 
-// Generate a local ID-JAG token when token exchange is not supported
-// This creates a JWT signed by the agent that encapsulates the delegation
-function generateLocalIdJagToken(userIdToken, userId) {
+// DEPRECATED: No longer using local fallback tokens
+// All tokens must come from Okta for proper security
+function generateLocalIdJagToken_DEPRECATED(userIdToken, userId) {
   if (!agentPrivateKey) {
     throw new Error('Agent private key not loaded');
   }
@@ -639,23 +647,32 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
         clientId: AGENT_CLIENT_ID,
         authMethod: 'Agent ID Assertion (private_key_jwt + token_exchange)'
       },
-      webappClientId: OKTA_CLIENT_ID,  // Add webapp client ID
-      orgAuthServer: `${OKTA_DOMAIN}/oauth2/v1`,  // Add ORG server
-      customAuthServer: CUSTOM_AUTH_SERVER,  // Add custom server
-      idJagToken: {
-        description: 'ID-JAG token from ORG server (step 1)',
+      webappClientId: OKTA_CLIENT_ID,
+      orgAuthServer: `${OKTA_DOMAIN}/oauth2/v1`,
+      customAuthServer: CUSTOM_AUTH_SERVER,
+      error: tokenData.error || false,
+      errorMessage: tokenData.errorMessage || null,
+      errorStep: tokenData.errorStep || null,
+      idJagToken: tokenData.idJagToken ? {
+        description: 'ID-JAG token from ORG server (step 2)',
         raw: tokenData.idJagToken,
         parsed: parseJwt(tokenData.idJagToken),
         fromOkta: tokenData.fromOkta
+      } : {
+        error: true,
+        message: tokenData.errorStep === 'step1' ? tokenData.errorMessage : 'Not obtained'
       },
-      mcpAccessToken: {
-        description: 'MCP access token from CUSTOM server (step 2)',
+      mcpAccessToken: tokenData.accessToken ? {
+        description: 'MCP access token from CUSTOM server (step 3)',
         raw: tokenData.accessToken,
         parsed: tokenData.parsed,
-        expiresAt: new Date(tokenData.expiresAt).toISOString(),
+        expiresAt: tokenData.expiresAt ? new Date(tokenData.expiresAt).toISOString() : null,
         tokenType: tokenData.tokenType,
         scope: tokenData.scope,
         fromOkta: tokenData.fromOkta
+      } : {
+        error: true,
+        message: tokenData.errorStep === 'step2' ? tokenData.errorMessage : 'Not obtained'
       }
     });
   } catch (error) {

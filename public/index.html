@@ -727,36 +727,44 @@
           </div>
         </div>
 
-        <div class="token-section" style="border: 2px solid #f59e0b; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
+        <div class="token-section" style="border: 2px solid ${agentTokens?.idJagToken?.error ? '#ef4444' : '#f59e0b'}; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
           <h3>
-            <span style="color: #f59e0b;">●</span> ID-JAG Token (Step 2)
+            <span style="color: ${agentTokens?.idJagToken?.error ? '#ef4444' : '#f59e0b'};">●</span> ID-JAG Token (Step 2)
             <span class="badge" style="background: #78350f; color: #fbbf24;">ORG → token-exchange</span>
             ${agentTokens?.idJagToken?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.idJagToken.raw}')">Copy</button>` : ''}
           </h3>
           <div style="font-size: 0.75rem; color: #fbbf24; margin-bottom: 0.5rem;">
             Contains dual identity (user + agent) - Exchanged for access token
           </div>
-          <div class="token-raw">${agentTokens?.idJagToken?.raw || 'Not available'}</div>
-          <div class="token-parsed">
-            ${renderClaims(agentTokens?.idJagToken?.parsed)}
-          </div>
-          ${agentTokens?.idJagToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta ORG</div>' : ''}
+          ${agentTokens?.idJagToken?.error ?
+            `<div style="padding: 0.75rem; background: #7f1d1d; border-radius: 4px; color: #fca5a5;">
+              <strong>❌ Token Exchange Failed</strong><br>
+              ${agentTokens.idJagToken.message}
+            </div>` :
+            `<div class="token-raw">${agentTokens?.idJagToken?.raw || 'Not available'}</div>
+             <div class="token-parsed">${renderClaims(agentTokens?.idJagToken?.parsed)}</div>
+             ${agentTokens?.idJagToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta ORG</div>' : ''}`
+          }
         </div>
 
-        <div class="token-section" style="border: 2px solid #a78bfa; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1e1b4b;">
+        <div class="token-section" style="border: 2px solid ${agentTokens?.mcpAccessToken?.error ? '#ef4444' : '#a78bfa'}; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1e1b4b;">
           <h3>
-            <span style="color: #a78bfa;">●</span> MCP Access Token (Step 3)
+            <span style="color: ${agentTokens?.mcpAccessToken?.error ? '#ef4444' : '#a78bfa'};">●</span> MCP Access Token (Step 3)
             <span class="badge" style="background: #4c1d95; color: #c4b5fd;">Custom → jwt-bearer</span>
             ${agentTokens?.mcpAccessToken?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.mcpAccessToken.raw}')">Copy</button>` : ''}
           </h3>
           <div style="font-size: 0.75rem; color: #c4b5fd; margin-bottom: 0.5rem;">
             Final token sent to MCP - MCP validates this with Custom Server JWKS
           </div>
-          <div class="token-raw">${agentTokens?.mcpAccessToken?.raw || 'Not available'}</div>
-          <div class="token-parsed">
-            ${renderClaims(agentTokens?.mcpAccessToken?.parsed)}
-          </div>
-          ${agentTokens?.mcpAccessToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta Custom Server</div>' : ''}
+          ${agentTokens?.mcpAccessToken?.error ?
+            `<div style="padding: 0.75rem; background: #7f1d1d; border-radius: 4px; color: #fca5a5;">
+              <strong>❌ JWT Bearer Grant Failed</strong><br>
+              ${agentTokens.mcpAccessToken.message}
+            </div>` :
+            `<div class="token-raw">${agentTokens?.mcpAccessToken?.raw || 'Not available'}</div>
+             <div class="token-parsed">${renderClaims(agentTokens?.mcpAccessToken?.parsed)}</div>
+             ${agentTokens?.mcpAccessToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta Custom Server</div>' : ''}`
+          }
         </div>
 
         <div style="margin-top: 1rem; padding: 0.75rem; background: #1e293b; border-radius: 6px; font-size: 0.75rem; color: #94a3b8;">
