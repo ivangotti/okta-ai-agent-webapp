@@ -345,6 +345,7 @@ function generateLocalIdJagToken(userIdToken, userId) {
 
   return {
     accessToken: token,
+    idJagToken: token,  // Include for display in UI
     expiresAt: Date.now() + 3600000,
     parsed: payload,
     tokenType: 'Bearer',
@@ -354,7 +355,8 @@ function generateLocalIdJagToken(userIdToken, userId) {
       agentId: AGENT_CLIENT_ID,
       agentName: AGENT_NAME
     },
-    onBehalfOf: userId
+    onBehalfOf: userId,
+    fromOkta: false
   };
 }
 
