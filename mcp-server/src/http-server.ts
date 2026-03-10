@@ -159,6 +159,12 @@ async function validateIdJagToken(token: string, expectedAudience: string): Prom
       throw new Error(`Invalid audience. Expected: ${expectedAudience}, Got: ${claims.aud}`);
     }
 
+    // Validate scope
+    const requiredScope = 'ask-nist-mcp';
+    if (!claims.scope || !claims.scope.includes(requiredScope)) {
+      throw new Error(`Missing required scope: ${requiredScope}. Token has: ${claims.scope || 'none'}`);
+    }
+
     logger.info('✅ ID-JAG token validated:', {
       user: claims.sub,
       agent: claims.client_id,
