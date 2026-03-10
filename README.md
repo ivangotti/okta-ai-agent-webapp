@@ -299,6 +299,114 @@ The MCP server performs cryptographic validation on every request:
 
 ---
 
+### How to Get an ID-JAG Token (Technical Details)
+
+#### The HTTP Request
+
+**Endpoint:**
+```
+POST https://your-okta-domain.okta.com/oauth2/v1/token
+```
+
+**Headers:**
+```
+Content-Type: application/x-www-form-urlencoded
+Accept: application/json
+```
+
+**Body Parameters (URL-encoded):**
+```
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+requested_token_type=urn:ietf:params:oauth:token-type:id-jag
+client_id=YOUR_AGENT_ID
+subject_token={USER_ID_TOKEN}
+subject_token_type=urn:ietf:params:oauth:token-type:id_token
+audience=https://your-okta-domain.okta.com/oauth2/YOUR_CUSTOM_AUTH_SERVER_ID
+scope=ask-nist-mcp
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={SIGNED_JWT}
+```
+
+#### Client Assertion (Agent Authentication)
+
+The agent proves its identity by signing a JWT with its **private RSA key** (NOT a client_secret):
+
+**JWT Header:**
+```json
+{
+  "alg": "RS256",
+  "kid": "5735db861203a85ed98ee80a18543743"
+}
+```
+
+**JWT Payload:**
+```json
+{
+  "iss": "YOUR_AGENT_ID",
+  "sub": "YOUR_AGENT_ID",
+  "aud": "https://your-okta-domain.okta.com/oauth2/v1/token",
+  "iat": 1773106644,
+  "exp": 1773106944,
+  "jti": "unique-random-uuid"
+}
+```
+
+**Signature:** Created with agent's private key (RS256 algorithm)
+
+#### Response from Okta
+
+```json
+{
+  "token_type": "N_A",
+  "expires_in": 300,
+  "access_token": "eyJraWQiOiJBZ1dsLT...",
+  "issued_token_type": "urn:ietf:params:oauth:token-type:id-jag"
+}
+```
+
+The `access_token` field contains the ID-JAG token (despite the field name).
+
+#### Code Implementation
+
+```javascript
+async function getIdJagToken(userIdToken, userId) {
+  // Generate client assertion
+  const clientAssertion = generateClientAssertion(
+    AGENT_CLIENT_ID,
+    'https://your-okta-domain.okta.com/oauth2/v1/token'
+  );
+
+  // Token exchange request
+  const response = await fetch(
+    'https://your-okta-domain.okta.com/oauth2/v1/token',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        requested_token_type: 'urn:ietf:params:oauth:token-type:id-jag',
+        client_id: AGENT_CLIENT_ID,
+        subject_token: userIdToken,
+        subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+        audience: CUSTOM_AUTH_SERVER,
+        scope: 'ask-nist-mcp',
+        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        client_assertion: clientAssertion
+      })
+    }
+  );
+
+  const data = await response.json();
+  return data.access_token;  // ID-JAG token
+}
+```
+
+**Key Point:** Agent authenticates with **signed JWT** (private key), not client_secret!
+
+---
+
 ## Architecture
 
 **Component Flow:**
