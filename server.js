@@ -8,7 +8,11 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, appendFileSync, mkdirSync } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,12 +20,156 @@ const __dirname = dirname(__filename);
 // Load environment variables
 dotenv.config();
 
+// ─── Token File Logger ───────────────────────────────────────────────────────
+const LOG_DIR = join(__dirname, 'logs');
+const TOKEN_LOG = join(LOG_DIR, 'tokens.log');
+mkdirSync(LOG_DIR, { recursive: true });
+
+function logToken(label, token, extra = {}) {
+  const timestamp = new Date().toISOString();
+  const decoded = typeof token === 'string' ? parseJwtSafe(token) : token;
+  const entry = {
+    timestamp,
+    label,
+    ...extra,
+    raw: typeof token === 'string' ? token : undefined,
+    decoded
+  };
+  const line = `\n${'═'.repeat(80)}\n` +
+    `🔑 ${label}  |  ${timestamp}\n` +
+    `${'─'.repeat(80)}\n` +
+    (extra.user ? `   User: ${extra.user}\n` : '') +
+    (extra.flow ? `   Flow: ${extra.flow}\n` : '') +
+    (extra.endpoint ? `   Endpoint: ${extra.endpoint}\n` : '') +
+    `${'─'.repeat(80)}\n` +
+    `RAW:\n${typeof token === 'string' ? token : '(object)'}\n\n` +
+    `DECODED:\n${JSON.stringify(decoded, null, 2)}\n` +
+    `${'═'.repeat(80)}\n`;
+
+  appendFileSync(TOKEN_LOG, line);
+  console.log(`📝 Token logged → ${TOKEN_LOG} [${label}]`);
+}
+
+// Safe JWT parse (used before the main parseJwt is defined)
+function parseJwtSafe(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return { error: 'not a JWT', value: token.substring(0, 50) + '...' };
+    const header = JSON.parse(Buffer.from(parts[0], 'base64').toString());
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+    return { header, payload };
+  } catch (e) {
+    return { error: 'parse failed', snippet: token.substring(0, 50) };
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const app = express();
 
 // Configuration from environment
-const LITELLM_BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://llm.atko.ai';
-const LITELLM_API_KEY = process.env.LITELLM_KEY || process.env.ANTHROPIC_API_KEY;
+let LITELLM_BASE_URL = process.env.ANTHROPIC_BASE_URL || null;
+const LITELLM_STATIC_KEY = process.env.LITELLM_KEY || process.env.ANTHROPIC_API_KEY || null;
+const LITELLM_SITE = process.env.LITELLM_SITE || null;
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8080';
+
+// ─── Okta Credential Manager (OCM) ───────────────────────────────────────────
+// Replaces a fixed LITELLM_KEY: shells out to `ocm auth litellm --format json`,
+// caches the bundle, refreshes ~5 min before expiry, force-refreshes on 401.
+// If LITELLM_STATIC_KEY is set, it is used as a fallback (dev/offline mode).
+const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000;
+let ocmTokenBundle = null;
+let ocmTokenRefreshPromise = null;
+
+async function fetchOcmLitellmToken({ site, force = false } = {}) {
+  const args = ['auth', 'litellm', '--format', 'json'];
+  if (site) args.push('--site', site);
+  if (force) args.push('--force');
+
+  let stdout;
+  try {
+    const result = await execFileAsync('ocm', args, {
+      timeout: 60000,
+      maxBuffer: 4 * 1024 * 1024
+    });
+    stdout = result.stdout;
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      throw new Error('ocm CLI not found in PATH. Install Okta Credential Manager.');
+    }
+    const stderr = (err.stderr || '').trim();
+    throw new Error(`ocm auth litellm failed: ${stderr || err.message}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    throw new Error('ocm auth litellm returned non-JSON output');
+  }
+  if (!data.access_token) {
+    throw new Error('ocm auth litellm response missing access_token');
+  }
+  const expiresAt = data.expires_in ? new Date(data.expires_in).getTime() : null;
+  return {
+    accessToken: data.access_token,
+    tokenHost: data.token_host || null,
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null
+  };
+}
+
+async function getLiteLLMToken({ force = false } = {}) {
+  // Static key fallback for development/offline use.
+  if (LITELLM_STATIC_KEY && !process.env.OCM_REQUIRED) {
+    if (!ocmTokenBundle) {
+      console.log('🔑 Using static LITELLM_KEY (set OCM_REQUIRED=1 to force ocm)');
+      ocmTokenBundle = { accessToken: LITELLM_STATIC_KEY, tokenHost: null, expiresAt: null };
+    }
+    return ocmTokenBundle.accessToken;
+  }
+
+  const now = Date.now();
+  const isFresh = ocmTokenBundle?.accessToken &&
+    (!ocmTokenBundle.expiresAt || ocmTokenBundle.expiresAt - now > TOKEN_REFRESH_LEEWAY_MS);
+  if (!force && isFresh) return ocmTokenBundle.accessToken;
+
+  if (!ocmTokenRefreshPromise) {
+    ocmTokenRefreshPromise = (async () => {
+      console.log(`🔑 Refreshing LiteLLM token via ocm${LITELLM_SITE ? ` (--site ${LITELLM_SITE})` : ''}...`);
+      const bundle = await fetchOcmLitellmToken({ site: LITELLM_SITE, force });
+      ocmTokenBundle = bundle;
+      // Derive base URL from token_host if not explicitly set.
+      if (!LITELLM_BASE_URL && bundle.tokenHost) {
+        LITELLM_BASE_URL = `https://${bundle.tokenHost}`;
+        console.log(`🔑 Derived LITELLM_BASE_URL from ocm: ${LITELLM_BASE_URL}`);
+      }
+      if (bundle.expiresAt) {
+        const minutes = Math.round((bundle.expiresAt - Date.now()) / 60000);
+        console.log(`🔑 Token valid for ~${minutes} min`);
+      }
+      return bundle.accessToken;
+    })().finally(() => { ocmTokenRefreshPromise = null; });
+  }
+  return ocmTokenRefreshPromise;
+}
+
+async function callLiteLLM(path, init) {
+  let token = await getLiteLLMToken();
+  if (!LITELLM_BASE_URL) LITELLM_BASE_URL = 'https://llm.atko.ai';
+  const buildHeaders = (t) => ({
+    ...init.headers,
+    'Authorization': `Bearer ${t}`,
+    'x-api-key': t
+  });
+
+  let response = await fetch(`${LITELLM_BASE_URL}${path}`, { ...init, headers: buildHeaders(token) });
+  if (response.status === 401 && !LITELLM_STATIC_KEY) {
+    console.log('🔑 Got 401 from LiteLLM, forcing ocm token refresh');
+    token = await getLiteLLMToken({ force: true });
+    response = await fetch(`${LITELLM_BASE_URL}${path}`, { ...init, headers: buildHeaders(token) });
+  }
+  return response;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 const MODEL = process.env.MODEL || process.env.ANTHROPIC_DEFAULT_SONNET_MODEL || 'claude-4-5-sonnet';
 
 // Okta Configuration (User Authentication - Inbound) - FROM ENV
@@ -97,13 +245,20 @@ function generateClientAssertion(clientId, tokenEndpoint) {
 
   const privateKeyPem = jwkToPem(agentPrivateKey);
 
-  return jwt.sign(payload, privateKeyPem, {
+  const assertion = jwt.sign(payload, privateKeyPem, {
     algorithm: 'RS256',
     header: {
       alg: 'RS256',
       kid: agentPrivateKey.kid
     }
   });
+
+  logToken('CLIENT_ASSERTION', assertion, {
+    flow: 'private_key_jwt',
+    endpoint: tokenEndpoint
+  });
+
+  return assertion;
 }
 
 // Agent token cache (for client credentials - agent's own identity)
@@ -163,6 +318,11 @@ async function getAgentAccessToken(scopes = []) {
       tokenType: data.token_type,
       scope: data.scope
     };
+
+    logToken('AGENT_ACCESS_TOKEN', data.access_token, {
+      flow: 'client_credentials',
+      endpoint: tokenEndpoint
+    });
 
     console.log('Agent access token obtained successfully');
     return agentTokenCache;
@@ -226,6 +386,13 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
 
     const idJagData = await idJagResponse.json();
     const idJagToken = idJagData.access_token;
+
+    logToken('ID-JAG_TOKEN (Step 1)', idJagToken, {
+      flow: 'token_exchange → ID-JAG',
+      user: userId,
+      endpoint: ORG_TOKEN_ENDPOINT
+    });
+
     console.log('✅ ID-JAG token received');
     console.log('   Token type:', idJagData.issued_token_type);
 
@@ -262,6 +429,13 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
     }
 
     const accessTokenData = await accessTokenResponse.json();
+
+    logToken('MCP_ACCESS_TOKEN (Step 2)', accessTokenData.access_token, {
+      flow: 'jwt_bearer → access_token',
+      user: userId,
+      endpoint: customTokenEndpoint
+    });
+
     console.log('✅ MCP access token received');
     console.log('   Expires in:', accessTokenData.expires_in);
     console.log('   Scope:', accessTokenData.scope);
@@ -432,6 +606,16 @@ passport.use('oidc', new OpenIDConnectStrategy({
       idTokenParsed: parseJwt(idToken),
       accessTokenParsed: parseJwt(accessToken)
     };
+
+    logToken('USER_ID_TOKEN (OIDC Login)', idToken, {
+      flow: 'authorization_code',
+      user: profile._json?.email || profile.id
+    });
+    logToken('USER_ACCESS_TOKEN (OIDC Login)', accessToken, {
+      flow: 'authorization_code',
+      user: profile._json?.email || profile.id
+    });
+
     console.log('User created with tokens');
     return cb(null, user);
   } catch (err) {
@@ -751,7 +935,7 @@ app.get('/api/health', async (req, res) => {
       clientId: AGENT_CLIENT_ID,
       keyLoaded: !!agentPrivateKey
     },
-    llm: { baseUrl: LITELLM_BASE_URL, model: MODEL },
+    llm: { baseUrl: LITELLM_BASE_URL || '(resolving via ocm)', model: MODEL, auth: LITELLM_STATIC_KEY ? 'static-key' : 'ocm' },
     mcp: mcpHealth
   });
 });
@@ -874,11 +1058,10 @@ Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
     };
 
     console.log('Calling Claude...');
-    let response = await fetch(`${LITELLM_BASE_URL}/v1/messages`, {
+    let response = await callLiteLLM('/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': LITELLM_API_KEY,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify(requestBody)
@@ -924,11 +1107,10 @@ Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
       );
 
       console.log('Sending tool results back to Claude...');
-      response = await fetch(`${LITELLM_BASE_URL}/v1/messages`, {
+      response = await callLiteLLM('/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': LITELLM_API_KEY,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
@@ -996,7 +1178,8 @@ app.listen(PORT, () => {
 ║  └─ Key ID:     ${agentPrivateKey?.kid || 'not loaded'}     ║
 ║  └─ Auth Type:  private_key_jwt (RS256)                           ║
 ╠═══════════════════════════════════════════════════════════════════╣
-║  LiteLLM:       ${LITELLM_BASE_URL.padEnd(46)}║
+║  LiteLLM:       ${(LITELLM_BASE_URL || '(resolving via ocm)').padEnd(46)}║
+║  LLM Auth:      ${(LITELLM_STATIC_KEY ? 'static LITELLM_KEY (fallback)' : 'ocm auth litellm').padEnd(46)}║
 ║  MCP Server:    ${MCP_SERVER_URL.padEnd(46)}║
 ║  Okta Issuer:   ${OKTA_ISSUER.substring(0, 46)}║
 ╚═══════════════════════════════════════════════════════════════════╝

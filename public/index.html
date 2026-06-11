@@ -481,7 +481,7 @@
 <body>
   <!-- Token Modal -->
   <div class="modal-overlay" id="tokenModal" onclick="closeTokenModal(event)">
-    <div class="modal" onclick="event.stopPropagation()" style="max-width: 900px;">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width: 1280px;">
       <div class="modal-header">
         <h2>OAuth Token Architecture</h2>
         <button class="modal-close" onclick="closeTokenModal()">&times;</button>
@@ -665,41 +665,128 @@
     function renderAllTokens(data) {
       const { userTokens, agentTokens } = data;
 
+      const userDisplayName = userTokens?.idToken?.parsed?.name || userTokens?.idToken?.parsed?.email || (currentUser && (currentUser.displayName || currentUser.email)) || 'authenticated user';
+      const userSub = userTokens?.idToken?.parsed?.sub || userTokens?.idToken?.parsed?.email || '—';
+      const agentClientId = agentTokens?.agent?.clientId || 'agent_client_id';
+      const agentName = agentTokens?.agent?.name || 'NIST CSF AI Agent';
+      const agentAuthMethod = agentTokens?.agent?.authMethod || 'private_key_jwt';
+
       return `
-        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px; border-left: 4px solid #3b82f6;">
-          <h3 style="color: #60a5fa; margin-bottom: 0.75rem; font-size: 0.9rem;">Okta AI Agent Token Architecture</h3>
-          <div style="font-size: 0.75rem; color: #94a3b8; font-family: monospace; line-height: 1.6;">
-            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-              <strong style="color: #4ade80;">Step 1: User Authentication (Inbound)</strong><br>
-              • Client ID: <code style="color: #4ade80;">${agentTokens?.webappClientId || '0oa2o8rchw8BvvkEA0h8'}</code> (Web App)<br>
-              • Auth Server: <code>${agentTokens?.orgAuthServer || 'ORG'}/authorize</code><br>
-              • Grant: authorization_code<br>
-              • Result: <span style="color: #4ade80;">User ID Token + Access Token</span>
+        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #3b82f6;">
+          <h3 style="color: #e2e8f0; margin: 0 0 1rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Okta AI Agent Token Architecture</h3>
+          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
+            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1180px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
+
+              <!-- IDENTITY · USER -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${userDisplayName}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${userSub}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">auth</span><span style="color: #e2e8f0;">Okta MFA required</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">token</span><span style="color: #f59e0b;">id_token · 1hr TTL</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: id_token / OIDC -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #4ade80; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #4ade80; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">OIDC</div>
+              </div>
+
+              <!-- APP · APP -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">APP</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">APP</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">name</span><span style="color: #e2e8f0;">${agentName}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">creds</span><span style="color: #e2e8f0;">none stored</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">scope</span><span style="color: #e2e8f0;">openid profile email</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: id_token / delegated -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #4ade80; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #4ade80; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">delegated</div>
+              </div>
+
+              <!-- DELEGATION · ID-JAG (highlighted) -->
+              <div style="flex: 1.05; min-width: 220px; background: #1c1917; border: 2px solid #f59e0b; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.08);">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #78350f;">
+                  <span style="background: #78350f; color: #fbbf24; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">DELEGATION</span>
+                  <span style="color: #fbbf24; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">ID-JAG</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 38px;">what</span><span style="color: #e2e8f0;">agent signs id_token with private key</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 38px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${userSub}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 38px;">cid</span><span style="color: #fbbf24; word-break: break-all;">${agentClientId}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 38px;">auth</span><span style="color: #e2e8f0;">${agentAuthMethod}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 38px;">scope</span><span style="color: #e2e8f0;">mcp:query mcp:assess</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: ID-JAG JWT -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">ID-JAG JWT</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #f59e0b; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #f59e0b; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.04em;">jwt-bearer</div>
+              </div>
+
+              <!-- AUTHORIZATION · CUSTOM AS -->
+              <div style="flex: 1; min-width: 210px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #14532d; color: #86efac; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">AUTHORIZATION</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">CUSTOM AS</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">checks</span><span style="color: #e2e8f0;">ID-JAG signature (via Okta JWKS)</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">issues</span><span style="color: #a78bfa;">MCP Access Token (RS256)</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">routing</span><span style="color: #e2e8f0;">aud → MCP Server</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">records</span><span style="color: #e2e8f0;">user + agent claims</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: Access Token / Bearer -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">Access Token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #a78bfa; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #a78bfa; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">Bearer</div>
+              </div>
+
+              <!-- HOST · MCP SERVER -->
+              <div style="flex: 1; min-width: 210px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">HOST</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">MCP SERVER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">target</span><span style="color: #e2e8f0;">localhost:8080</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">account</span><span style="color: #e2e8f0;">on behalf of user (JIT)</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">auth</span><span style="color: #e2e8f0;">Bearer token only · no password</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">enforce</span><span style="color: #e2e8f0;">JWKS validate · scope check</span></div>
+                </div>
+              </div>
+
             </div>
-            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-              <strong style="color: #f59e0b;">Step 2: ID-JAG Token Exchange</strong><br>
-              • Client ID: <code style="color: #f59e0b;">${agentTokens?.agent?.clientId || 'YOUR_AGENT_ID'}</code> (AI Agent)<br>
-              • Auth Server: <code>${agentTokens?.orgAuthServer || 'ORG'}/token</code><br>
-              • Grant: token-exchange<br>
-              • Subject: User's ID Token<br>
-              • Auth: private_key_jwt (RS256)<br>
-              • Audience: <code style="font-size: 0.7rem;">${agentTokens?.customAuthServer || 'Custom Server'}</code><br>
-              • Result: <span style="color: #f59e0b;">ID-JAG Token</span>
-            </div>
-            <div style="margin-bottom: 0.75rem; padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-              <strong style="color: #a78bfa;">Step 3: Exchange ID-JAG for Access Token</strong><br>
-              • Grant: jwt-bearer<br>
-              • Assertion: ID-JAG Token<br>
-              • Auth Server: <code>Custom</code><br>
-              • Result: <span style="color: #a78bfa;">MCP Access Token</span>
-            </div>
-            <div style="padding: 0.5rem; background: #1e293b; border-radius: 4px;">
-              <strong style="color: #60a5fa;">Step 4: Call MCP Server (Outbound)</strong><br>
-              • Agent uses MCP Access Token<br>
-              • MCP Server: localhost:8080<br>
-              • Authorization: Bearer {Access Token}<br>
-              • MCP validates with Custom Server JWKS
-            </div>
+          </div>
+          <div style="margin-top: 0.75rem; font-size: 0.65rem; color: #64748b; font-family: monospace;">
+            Flow: User signs in (OIDC) → Web app delegates id_token to Agent → Agent signs ID-JAG with private key → Custom AS validates &amp; mints MCP Access Token → Agent calls MCP with Bearer token.
           </div>
         </div>
 
