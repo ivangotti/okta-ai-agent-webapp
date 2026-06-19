@@ -5,10 +5,10 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "concurrently --kill-others-on-fail -n MCP,WEB -c blue,green \"npm run start:mcp\" \"npm run start:web\"",
+    "start:web": "node server.js",
     "dev": "node --watch server.js",
     "start:mcp": "cd mcp-server && npm run start:http",
-    "start:both": "concurrently \"npm run start:mcp\" \"npm start\"",
     "setup:mcp": "cd mcp-server && npm install && npm run build && npm run import:csf-framework && npm run seed:questions",
     "setup:all": "npm install && npm run setup:mcp"
   },
@@ -20,5 +20,8 @@
     "jsonwebtoken": "^9.0.3",
     "passport": "^0.7.0",
     "passport-openidconnect": "^0.1.2"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
   }
 }

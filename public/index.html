@@ -891,7 +891,7 @@
 
         // Format objects
         if (typeof value === 'object' && value !== null) {
-          value = JSON.stringify(value);
+          value = `<pre style="margin:0;white-space:pre-wrap;word-break:break-all;">${JSON.stringify(value, null, 2)}</pre>`;
         }
 
         return `

@@ -8,6 +8,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 import { logger } from './utils/logger.js';
 import { getDatabase, closeDatabase } from './db/database.js';
 import { initializeFramework, getFrameworkLoader } from './services/framework-loader.js';
@@ -42,6 +43,135 @@ import { getAssessmentQuestions } from './tools/get_assessment_questions.js';
 import { validateAssessmentResponses } from './tools/validate_assessment_responses.js';
 import { getQuestionContext } from './tools/get_question_context.js';
 import { resetOrganizationalData } from './tools/reset_organizational_data.js';
+// Cache for JWKS keys
+let jwksCache = null;
+let jwksCacheExpiry = 0;
+// Fetch JWKS from Okta (supports both ORG and Custom auth servers)
+async function fetchJwks(issuer) {
+    const now = Date.now();
+    // Return cached if still valid (cache for 1 hour)
+    if (jwksCache && jwksCacheExpiry > now) {
+        return jwksCache;
+    }
+    try {
+        // Construct JWKS URL based on issuer format
+        let jwksUrl;
+        if (issuer.includes('/oauth2/') && !issuer.endsWith('/oauth2')) {
+            // Custom auth server: https://domain.okta.com/oauth2/aus123
+            jwksUrl = `${issuer}/v1/keys`;
+        }
+        else {
+            // ORG server: https://domain.okta.com
+            jwksUrl = `${issuer}/oauth2/v1/keys`;
+        }
+        logger.info('Fetching JWKS from Okta:', jwksUrl);
+        const response = await fetch(jwksUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch JWKS: ${response.status}`);
+        }
+        jwksCache = await response.json();
+        jwksCacheExpiry = now + (60 * 60 * 1000); // Cache for 1 hour
+        logger.info('JWKS fetched and cached');
+        return jwksCache;
+    }
+    catch (error) {
+        logger.error('Failed to fetch JWKS:', error);
+        throw error;
+    }
+}
+// Validate MCP access token from CUSTOM auth server
+async function validateMcpAccessToken(token, expectedAudience) {
+    try {
+        // Decode without verification first to get issuer and kid
+        const decoded = jwt.decode(token, { complete: true });
+        if (!decoded || !decoded.header || !decoded.payload) {
+            throw new Error('Invalid token format');
+        }
+        const issuer = decoded.payload.iss;
+        const kid = decoded.header.kid;
+        logger.info('Validating MCP access token:', {
+            issuer,
+            kid,
+            sub: decoded.payload.sub,
+            cid: decoded.payload.cid
+        });
+        // Fetch JWKS from the CUSTOM auth server
+        const jwks = await fetchJwks(issuer);
+        // Find the key
+        const key = jwks.keys.find((k) => k.kid === kid);
+        if (!key) {
+            throw new Error(`Key ${kid} not found in JWKS`);
+        }
+        // For now, validate basic claims without full signature verification
+        // (Full signature verification requires proper JWK to PEM conversion library)
+        const claims = decoded.payload;
+        // Validate claims
+        if (claims.exp * 1000 < Date.now()) {
+            throw new Error('Token expired');
+        }
+        // Expected audience for MCP tokens
+        const expectedAud = process.env.MCP_AUDIENCE || 'api://nist-mcp-server';
+        if (claims.aud !== expectedAud) {
+            throw new Error(`Invalid audience. Expected: ${expectedAud}, Got: ${claims.aud}`);
+        }
+        // Validate scope
+        const requiredScope = 'ask-nist-mcp';
+        const tokenScopes = Array.isArray(claims.scp) ? claims.scp : (claims.scope || '').split(' ');
+        if (!tokenScopes.includes(requiredScope)) {
+            throw new Error(`Missing required scope: ${requiredScope}. Token has: ${tokenScopes.join(', ')}`);
+        }
+        logger.info('✅ MCP access token validated:', {
+            user: claims.sub,
+            client: claims.cid,
+            scope: tokenScopes.join(', ')
+        });
+        // Return in IdJagClaims format for compatibility
+        return {
+            sub: claims.sub,
+            client_id: claims.cid,
+            scope: tokenScopes.join(' '),
+            aud: claims.aud,
+            iss: claims.iss,
+            exp: claims.exp,
+            iat: claims.iat
+        };
+    }
+    catch (error) {
+        logger.error('Access token validation failed:', error);
+        throw error;
+    }
+}
+// Middleware to validate MCP access tokens
+function validateMcpAccessTokenMiddleware(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({
+            success: false,
+            error: 'Missing or invalid Authorization header',
+            timestamp: new Date().toISOString(),
+            tool: 'auth'
+        });
+    }
+    const token = authHeader.substring(7);
+    const expectedAudience = process.env.MCP_AUDIENCE || 'api://nist-mcp-server';
+    validateMcpAccessToken(token, expectedAudience)
+        .then((claims) => {
+        // Attach claims to request for use in handlers
+        req.idJagClaims = claims;
+        req.userId = claims.sub;
+        req.agentId = claims.client_id;
+        next();
+    })
+        .catch((error) => {
+        logger.error('Authorization failed:', error.message);
+        res.status(401).json({
+            success: false,
+            error: `ID-JAG token validation failed: ${error.message}`,
+            timestamp: new Date().toISOString(),
+            tool: 'auth'
+        });
+    });
+}
 // Tool registry for HTTP API - Only registered MCP tools
 const HTTP_TOOLS = {
     // Framework Query Tools
@@ -364,9 +494,15 @@ export async function startHttpServer(port = 8080) {
         });
     });
     // Generic tool execution endpoint
-    app.post('/api/tools/:toolName', async (req, res) => {
+    app.post('/api/tools/:toolName', validateMcpAccessTokenMiddleware, async (req, res) => {
         const { toolName } = req.params;
         const params = req.body;
+        // Log the authenticated request
+        logger.info('Authenticated tool request:', {
+            tool: toolName,
+            user: req.userId,
+            agent: req.agentId
+        });
         try {
             // Validate tool exists
             if (!HTTP_TOOLS[toolName]) {

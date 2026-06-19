@@ -68,14 +68,12 @@ const app = express();
 
 // Configuration from environment
 let LITELLM_BASE_URL = process.env.ANTHROPIC_BASE_URL || null;
-const LITELLM_STATIC_KEY = process.env.LITELLM_KEY || process.env.ANTHROPIC_API_KEY || null;
 const LITELLM_SITE = process.env.LITELLM_SITE || null;
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8080';
 
 // ─── Okta Credential Manager (OCM) ───────────────────────────────────────────
-// Replaces a fixed LITELLM_KEY: shells out to `ocm auth litellm --format json`,
-// caches the bundle, refreshes ~5 min before expiry, force-refreshes on 401.
-// If LITELLM_STATIC_KEY is set, it is used as a fallback (dev/offline mode).
+// Shells out to `ocm auth litellm --format json`, caches the bundle,
+// refreshes ~5 min before expiry, force-refreshes on 401.
 const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000;
 let ocmTokenBundle = null;
 let ocmTokenRefreshPromise = null;
@@ -118,15 +116,6 @@ async function fetchOcmLitellmToken({ site, force = false } = {}) {
 }
 
 async function getLiteLLMToken({ force = false } = {}) {
-  // Static key fallback for development/offline use.
-  if (LITELLM_STATIC_KEY && !process.env.OCM_REQUIRED) {
-    if (!ocmTokenBundle) {
-      console.log('🔑 Using static LITELLM_KEY (set OCM_REQUIRED=1 to force ocm)');
-      ocmTokenBundle = { accessToken: LITELLM_STATIC_KEY, tokenHost: null, expiresAt: null };
-    }
-    return ocmTokenBundle.accessToken;
-  }
-
   const now = Date.now();
   const isFresh = ocmTokenBundle?.accessToken &&
     (!ocmTokenBundle.expiresAt || ocmTokenBundle.expiresAt - now > TOKEN_REFRESH_LEEWAY_MS);
@@ -162,7 +151,7 @@ async function callLiteLLM(path, init) {
   });
 
   let response = await fetch(`${LITELLM_BASE_URL}${path}`, { ...init, headers: buildHeaders(token) });
-  if (response.status === 401 && !LITELLM_STATIC_KEY) {
+  if (response.status === 401) {
     console.log('🔑 Got 401 from LiteLLM, forcing ocm token refresh');
     token = await getLiteLLMToken({ force: true });
     response = await fetch(`${LITELLM_BASE_URL}${path}`, { ...init, headers: buildHeaders(token) });
@@ -935,7 +924,7 @@ app.get('/api/health', async (req, res) => {
       clientId: AGENT_CLIENT_ID,
       keyLoaded: !!agentPrivateKey
     },
-    llm: { baseUrl: LITELLM_BASE_URL || '(resolving via ocm)', model: MODEL, auth: LITELLM_STATIC_KEY ? 'static-key' : 'ocm' },
+    llm: { baseUrl: LITELLM_BASE_URL || '(resolving via ocm)', model: MODEL, auth: 'ocm' },
     mcp: mcpHealth
   });
 });
@@ -1179,7 +1168,7 @@ app.listen(PORT, () => {
 ║  └─ Auth Type:  private_key_jwt (RS256)                           ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║  LiteLLM:       ${(LITELLM_BASE_URL || '(resolving via ocm)').padEnd(46)}║
-║  LLM Auth:      ${(LITELLM_STATIC_KEY ? 'static LITELLM_KEY (fallback)' : 'ocm auth litellm').padEnd(46)}║
+║  LLM Auth:      ${'ocm auth litellm'.padEnd(46)}║
 ║  MCP Server:    ${MCP_SERVER_URL.padEnd(46)}║
 ║  Okta Issuer:   ${OKTA_ISSUER.substring(0, 46)}║
 ╚═══════════════════════════════════════════════════════════════════╝
