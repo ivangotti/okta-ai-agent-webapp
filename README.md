@@ -92,7 +92,7 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 
 ---
 
-## How It Works (The Token Dance)
+## How It Works (ID-JAG XAA flow)
 
 ### Simple Flow
 
@@ -241,12 +241,12 @@ The `search_users` tool (served by `users-mcp-server`) needs a real Okta API tok
 
 That key lives securely vaulted in **Okta Privileged Access Manager (PAM)**, in a managed connection the agent never sees directly. What the agent *does* have is an **Okta for AI Agents** identity that has been granted an integration into that PAM connection - an admin wires up "this Agent identity is allowed to request this specific vaulted secret" once, in Okta, ahead of time. From then on, every time the agent needs the key, it proves who it is with a **JWS** (a JSON Web Signature - a JWT signed with its private key) and presents the calling user's ID token alongside it. Okta validates both, checks the PAM authorization, and returns the secret - short-lived, single-use, and never persisted anywhere by the agent.
 
-This is a **different token-exchange grant** than the MCP Token Dance above, and it happens on every single call, never once and cached.
+This is a **different token-exchange grant** than the MCP ID-JAG XAA flow above, and it happens on every single call, never once and cached.
 
 ### Simple Flow
 
 ```
-1. User already logged in → Agent reuses the User's raw ID Token (same one from Token Dance Step 1)
+1. User already logged in → Agent reuses the User's raw ID Token (same one from ID-JAG XAA flow Step 1)
 2. Agent signs a fresh client_assertion (private_key_jwt) → proves agent identity
 3. Agent exchanges the User's ID Token → Gets a Vaulted Secret (ORG server, resource = PAM connection ORN)
 4. Agent uses the Vaulted Secret as the Okta API token (SSWS header) → Calls Okta Users API
@@ -258,15 +258,15 @@ This is a **different token-exchange grant** than the MCP Token Dance above, and
 
 #### Step 1: Reuse the User's Raw ID Token 👤
 
-- No new login - the raw ID Token from **Token Dance Step 1** is reused directly as the `subject_token` here.
-- **Key difference from the Token Dance:** `users-mcp-server` needs the user's raw ID Token itself, not an ID-JAG or Access Token - PAM validates the user's own ID Token directly, it doesn't accept a delegated/downstream token.
+- No new login - the raw ID Token from **ID-JAG XAA flow Step 1** is reused directly as the `subject_token` here.
+- **Key difference from the ID-JAG XAA flow:** `users-mcp-server` needs the user's raw ID Token itself, not an ID-JAG or Access Token - PAM validates the user's own ID Token directly, it doesn't accept a delegated/downstream token.
 - The webapp passes it straight through: `Authorization: Bearer {User's raw ID Token}` when calling `users-mcp-server`.
 
 ---
 
 #### Step 2: Token Exchange for a Vaulted Secret 🔐
 
-- **Client:** AI Agent (`YOUR_AGENT_ID` - same identity as the Token Dance)
+- **Client:** AI Agent (`YOUR_AGENT_ID` - same identity as the ID-JAG XAA flow)
 - **Server:** Okta ORG Authorization Server (same endpoint as the ID-JAG exchange, different grant params)
 - **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
 - **Grant:** Token Exchange
@@ -321,7 +321,7 @@ client_assertion={JWT signed with agent's private key}
 
 | Rule | Why |
 |------|-----|
-| **subject_token = raw ID Token, not ID-JAG/Access Token** | PAM validates the user's own ID Token directly - it's a different trust path than the MCP Token Dance |
+| **subject_token = raw ID Token, not ID-JAG/Access Token** | PAM validates the user's own ID Token directly - it's a different trust path than the MCP ID-JAG XAA flow |
 | **requested_token_type is Okta-namespaced (`urn:okta:...`)** | Not the IETF standard URN - specific to O4AA's vaulted-secret/service-account flows |
 | **resource = ORN, not audience/scope** | The vaulted-secret exchange targets a specific PAM connection resource, unlike the ID-JAG exchange which targets an audience + scope |
 | **Never cache the vaulted secret** | It's short-lived by design (5 min TTL) - fetch fresh on every call |
