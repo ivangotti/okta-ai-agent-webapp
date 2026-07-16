@@ -79,7 +79,9 @@ function generateClientAssertion(clientId: string, tokenEndpoint: string, privat
 }
 
 interface VaultedSecretResponse {
+  token_type?: string;
   issued_token_type?: string;
+  expires_in?: number;
   vaulted_secret?: {
     // The field actually populated depends on the PAM connection's secret
     // type. `private` matches the generic O4AA spec; this org's API-key
@@ -94,11 +96,66 @@ interface VaultedSecretResponse {
   error_description?: string;
 }
 
+const SECRET_FIELDS = ['private', 'apikey', 'password'] as const;
+
+/**
+ * Deep-clones Okta's raw token-exchange response with just the secret
+ * value swapped for "REDACTED" - everything else (issued_token_type,
+ * expires_in, which field the secret came back under, ...) is preserved
+ * verbatim so the shape shown in the webapp's viewer matches exactly what
+ * Okta actually returned.
+ */
+function redactVaultedSecretResponse(data: VaultedSecretResponse): VaultedSecretResponse {
+  const redacted: VaultedSecretResponse = JSON.parse(JSON.stringify(data));
+  if (redacted.vaulted_secret) {
+    for (const field of SECRET_FIELDS) {
+      if (redacted.vaulted_secret[field] != null) {
+        redacted.vaulted_secret[field] = 'REDACTED';
+      }
+    }
+  }
+  return redacted;
+}
+
+/**
+ * Metadata about a vaulted-secret exchange, for surfacing in the webapp's
+ * "OAuth Token Architecture" viewer. rawResponseRedacted mirrors Okta's
+ * actual response shape (issued_token_type, vaulted_secret, ...) with only
+ * the secret value itself swapped for "REDACTED" - never the real value.
+ */
+export interface VaultedSecretExchangeMeta {
+  tokenEndpoint: string;
+  resource: string;
+  requestedTokenType: string;
+  issuedTokenType?: string;
+  subjectTokenType: string;
+  expiresIn?: number;
+  clientAssertion: string;
+  fetchedAt: string;
+  rawResponseRedacted: VaultedSecretResponse;
+}
+
+export interface VaultedSecretResult {
+  secret: string;
+  meta: VaultedSecretExchangeMeta;
+}
+
+// In-memory only, overwritten by the next exchange and cleared on process
+// restart - never persisted. Exists solely so the webapp's red "DEBUG"
+// button can reveal the real value of the most recent exchange for local
+// debugging; the secret itself is still never included in any tool result
+// or in VaultedSecretExchangeMeta above.
+let lastRevealableSecret: { secret: string; fetchedAt: string } | null = null;
+
+export function getLastRevealableSecret(): { secret: string; fetchedAt: string } | null {
+  return lastRevealableSecret;
+}
+
 /**
  * Exchange the user's raw ID token for the vaulted secret (Okta API token)
  * stored behind VAULTED_SECRET_RESOURCE_ORN. Fetched fresh on every call.
  */
-export async function getVaultedSecret(userIdToken: string): Promise<string> {
+export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecretResult> {
   const oktaDomain = process.env.OKTA_DOMAIN || 'https://blackcastle.oktapreview.com';
   const agentClientId = process.env.AGENT_CLIENT_ID;
   const agentPrivateKeyPath = process.env.AGENT_PRIVATE_KEY_PATH || '../agent-keys/agent-private-key.json';
@@ -149,5 +206,26 @@ export async function getVaultedSecret(userIdToken: string): Promise<string> {
   }
 
   logger.info('Vaulted secret retrieved successfully', { issued_token_type: data.issued_token_type });
-  return secret;
+  // Verbose/debug-only: the real key, for local debugging. Never logged at
+  // info level - only visible with LOG_LEVEL=debug on this server's own
+  // console.
+  logger.debug('Vaulted secret raw response (contains real key)', { response: data });
+
+  const fetchedAt = new Date().toISOString();
+  lastRevealableSecret = { secret, fetchedAt };
+
+  return {
+    secret,
+    meta: {
+      tokenEndpoint: orgTokenEndpoint,
+      resource: resourceOrn,
+      requestedTokenType: 'urn:okta:params:oauth:token-type:vaulted-secret',
+      issuedTokenType: data.issued_token_type,
+      subjectTokenType: 'urn:ietf:params:oauth:token-type:id_token',
+      expiresIn: data.expires_in,
+      clientAssertion,
+      fetchedAt,
+      rawResponseRedacted: redactVaultedSecretResponse(data),
+    },
+  };
 }

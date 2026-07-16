@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getVaultedSecret } from '../services/okta-token-exchange.js';
+import { getVaultedSecret, VaultedSecretExchangeMeta } from '../services/okta-token-exchange.js';
 import { searchUsers as searchOktaUsers, OktaUserSummary } from '../services/okta-users-api.js';
 import { logger } from '../utils/logger.js';
 
@@ -21,6 +21,11 @@ export interface SearchUsersResult {
   count?: number;
   users?: OktaUserSummary[];
   error?: string;
+  // Metadata about the PAM vaulted-secret exchange this call performed -
+  // never the secret value itself. Surfaced by the webapp in its "OAuth
+  // Token Architecture" viewer so the diagram reflects the real flow that
+  // just ran instead of only the ID-JAG one.
+  pamExchange?: VaultedSecretExchangeMeta;
 }
 
 /**
@@ -32,13 +37,14 @@ export interface SearchUsersResult {
  */
 export async function searchUsers(params: SearchUsersParams, userIdToken: string): Promise<SearchUsersResult> {
   try {
-    const apiToken = await getVaultedSecret(userIdToken);
+    const { secret: apiToken, meta: pamExchange } = await getVaultedSecret(userIdToken);
     const users = await searchOktaUsers(apiToken, params);
 
     return {
       success: true,
       count: users.length,
       users,
+      pamExchange,
     };
   } catch (error: any) {
     logger.error('search_users tool failed', { error: error.message });

@@ -21,12 +21,13 @@ export const SearchUsersSchema = z
  */
 export async function searchUsers(params, userIdToken) {
     try {
-        const apiToken = await getVaultedSecret(userIdToken);
+        const { secret: apiToken, meta: pamExchange } = await getVaultedSecret(userIdToken);
         const users = await searchOktaUsers(apiToken, params);
         return {
             success: true,
             count: users.length,
             users,
+            pamExchange,
         };
     }
     catch (error) {

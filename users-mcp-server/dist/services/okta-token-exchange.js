@@ -64,6 +64,34 @@ function generateClientAssertion(clientId, tokenEndpoint, privateKeyPath) {
         },
     });
 }
+const SECRET_FIELDS = ['private', 'apikey', 'password'];
+/**
+ * Deep-clones Okta's raw token-exchange response with just the secret
+ * value swapped for "REDACTED" - everything else (issued_token_type,
+ * expires_in, which field the secret came back under, ...) is preserved
+ * verbatim so the shape shown in the webapp's viewer matches exactly what
+ * Okta actually returned.
+ */
+function redactVaultedSecretResponse(data) {
+    const redacted = JSON.parse(JSON.stringify(data));
+    if (redacted.vaulted_secret) {
+        for (const field of SECRET_FIELDS) {
+            if (redacted.vaulted_secret[field] != null) {
+                redacted.vaulted_secret[field] = 'REDACTED';
+            }
+        }
+    }
+    return redacted;
+}
+// In-memory only, overwritten by the next exchange and cleared on process
+// restart - never persisted. Exists solely so the webapp's red "DEBUG"
+// button can reveal the real value of the most recent exchange for local
+// debugging; the secret itself is still never included in any tool result
+// or in VaultedSecretExchangeMeta above.
+let lastRevealableSecret = null;
+export function getLastRevealableSecret() {
+    return lastRevealableSecret;
+}
 /**
  * Exchange the user's raw ID token for the vaulted secret (Okta API token)
  * stored behind VAULTED_SECRET_RESOURCE_ORN. Fetched fresh on every call.
@@ -110,5 +138,24 @@ export async function getVaultedSecret(userIdToken) {
         throw new Error('Vaulted secret exchange succeeded but response contained no usable secret value (checked private/apikey/password)');
     }
     logger.info('Vaulted secret retrieved successfully', { issued_token_type: data.issued_token_type });
-    return secret;
+    // Verbose/debug-only: the real key, for local debugging. Never logged at
+    // info level - only visible with LOG_LEVEL=debug on this server's own
+    // console.
+    logger.debug('Vaulted secret raw response (contains real key)', { response: data });
+    const fetchedAt = new Date().toISOString();
+    lastRevealableSecret = { secret, fetchedAt };
+    return {
+        secret,
+        meta: {
+            tokenEndpoint: orgTokenEndpoint,
+            resource: resourceOrn,
+            requestedTokenType: 'urn:okta:params:oauth:token-type:vaulted-secret',
+            issuedTokenType: data.issued_token_type,
+            subjectTokenType: 'urn:ietf:params:oauth:token-type:id_token',
+            expiresIn: data.expires_in,
+            clientAssertion,
+            fetchedAt,
+            rawResponseRedacted: redactVaultedSecretResponse(data),
+        },
+    };
 }

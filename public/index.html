@@ -694,13 +694,19 @@
 <body>
   <!-- Token Modal -->
   <div class="modal-overlay" id="tokenModal" onclick="closeTokenModal(event)">
-    <div class="modal" onclick="event.stopPropagation()" style="max-width: 1280px;">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width: 1280px; max-height: 102vh;">
       <div class="modal-header">
-        <h2>OAuth Token Architecture</h2>
+        <h2>
+          <button id="pamDebugBtn" onclick="toggleDebugReveal()" title="Reveal the real (unredacted) vaulted secret value for local debugging" style="background: #ef4444; color: #fff; border: none; border-radius: 4px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; padding: 3px 8px; margin-right: 0.6rem; cursor: pointer; vertical-align: middle;">DEBUG</button>
+          OAuth Token Architecture
+        </h2>
         <button class="modal-close" onclick="closeTokenModal()">&times;</button>
       </div>
-      <div class="modal-body" id="tokenModalBody">
-        <p>Loading tokens...</p>
+      <div class="modal-body" id="tokenModalBody" style="display: flex; flex-direction: column; padding: 0; overflow: hidden;">
+        <div id="tokenModalDiagrams" style="padding: 1.5rem 1.5rem 0 1.5rem; flex-shrink: 0;"></div>
+        <div id="tokenModalScrollable" style="padding: 0 1.5rem 1.5rem 1.5rem; overflow-y: auto; flex: 1;">
+          <p>Loading tokens...</p>
+        </div>
       </div>
     </div>
   </div>
@@ -877,10 +883,12 @@
 
     async function showTokens() {
       const modal = document.getElementById('tokenModal');
-      const modalBody = document.getElementById('tokenModalBody');
+      const diagramsEl = document.getElementById('tokenModalDiagrams');
+      const scrollableEl = document.getElementById('tokenModalScrollable');
 
       modal.classList.add('visible');
-      modalBody.innerHTML = '<p>Loading tokens...</p>';
+      diagramsEl.innerHTML = '';
+      scrollableEl.innerHTML = '<p>Loading tokens...</p>';
 
       try {
         // Fetch all token types in parallel
@@ -892,9 +900,11 @@
         tokenData.userTokens = userTokensRes.ok ? await userTokensRes.json() : null;
         tokenData.agentTokens = agentTokensRes.ok ? await agentTokensRes.json() : null;
 
-        modalBody.innerHTML = renderAllTokens(tokenData);
+        diagramsEl.innerHTML = renderTokenDiagrams(tokenData);
+        scrollableEl.innerHTML = renderTokenCards(tokenData);
       } catch (error) {
-        modalBody.innerHTML = `<p style="color: #f87171;">Error: ${error.message}</p>`;
+        diagramsEl.innerHTML = '';
+        scrollableEl.innerHTML = `<p style="color: #f87171;">Error: ${error.message}</p>`;
       }
     }
 
@@ -903,7 +913,10 @@
       document.getElementById('tokenModal').classList.remove('visible');
     }
 
-    function renderAllTokens(data) {
+    // Fixed/pinned part of the token modal - the architecture diagrams.
+    // Rendered into #tokenModalDiagrams, which does not scroll; only the
+    // token cards below it (renderTokenCards) scroll.
+    function renderTokenDiagrams(data) {
       const { userTokens, agentTokens } = data;
 
       const userDisplayName = userTokens?.idToken?.parsed?.name || userTokens?.idToken?.parsed?.email || (currentUser && (currentUser.displayName || currentUser.email)) || 'authenticated user';
@@ -911,49 +924,22 @@
       const agentClientId = agentTokens?.agent?.clientId || 'agent_client_id';
       const agentName = agentTokens?.agent?.name || 'NIST CSF AI Agent';
       const agentAuthMethod = agentTokens?.agent?.authMethod || 'private_key_jwt';
+      const webappClientId = agentTokens?.webappClientId || 'webapp_client_id';
+      // Steps 2 (ID-JAG) and 3 (MCP Access Token) only ever get populated as
+      // a side effect of a real /api/chat call (see idJagTokenCache in
+      // server.js) - so this flag is false until the user has actually sent
+      // at least one message to the agent this session, and the viewer
+      // shows only USER + APP until then.
+      const interacted = Boolean(agentTokens?.interacted);
+      // The two diagrams are mutually exclusive - only whichever flow the
+      // agent most recently actually used gets shown, per agentTokens.lastFlow
+      // (set in server.js at the same point each flow's own cache is
+      // populated). Before either flow has ever run, default to the ID-JAG
+      // diagram in its pre-interaction (USER + APP only) state.
+      const showPam = agentTokens?.lastFlow === 'users-mcp' && Boolean(agentTokens?.vaultedSecretExchange);
+      const showIdJag = !showPam;
 
-      return `
-        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #3b82f6;">
-          <h3 style="color: #e2e8f0; margin: 0 0 1rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Okta AI Agent Token Architecture</h3>
-          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
-            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1180px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
-
-              <!-- IDENTITY · USER -->
-              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
-                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
-                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
-                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
-                </div>
-                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${userDisplayName}</span></div>
-                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${userSub}</span></div>
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">auth</span><span style="color: #e2e8f0;">Okta MFA required</span></div>
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">token</span><span style="color: #f59e0b;">id_token · 1hr TTL</span></div>
-                </div>
-              </div>
-
-              <!-- arrow: id_token / OIDC -->
-              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px; padding: 0 0.4rem;">
-                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
-                <div style="position: relative; width: 100%; height: 2px; background: #4ade80; margin: 6px 0;">
-                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #4ade80; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
-                </div>
-                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">OIDC</div>
-              </div>
-
-              <!-- APP · APP -->
-              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
-                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
-                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">APP</span>
-                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">APP</span>
-                </div>
-                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">name</span><span style="color: #e2e8f0;">${agentName}</span></div>
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">creds</span><span style="color: #e2e8f0;">none stored</span></div>
-                  <div><span style="color: #64748b; display: inline-block; width: 44px;">scope</span><span style="color: #e2e8f0;">openid profile email</span></div>
-                </div>
-              </div>
-
+      const delegationStepsHtml = !interacted ? '' : `
               <!-- arrow: id_token / delegated -->
               <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px; padding: 0 0.4rem;">
                 <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
@@ -1023,14 +1009,78 @@
                   <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">enforce</span><span style="color: #e2e8f0;">JWKS validate · scope check</span></div>
                 </div>
               </div>
+      `;
+
+      const idJagDiagramHtml = !showIdJag ? '' : `
+        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #3b82f6;">
+          <h3 style="color: #e2e8f0; margin: 0 0 1rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Okta AI Agent Token Architecture</h3>
+          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
+            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1180px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
+
+              <!-- IDENTITY · USER -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${userDisplayName}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${userSub}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">auth</span><span style="color: #e2e8f0;">Okta MFA required</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">token</span><span style="color: #f59e0b;">id_token · 1hr TTL</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: id_token / OIDC -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #4ade80; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #4ade80; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">OIDC</div>
+              </div>
+
+              <!-- APP · APP -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">APP</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">APP</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">name</span><span style="color: #e2e8f0;">${agentName}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">webapp</span><span style="color: #fbbf24; word-break: break-all;">${webappClientId}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 50px;">agent</span><span style="color: #fbbf24; word-break: break-all;">${agentClientId}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">creds</span><span style="color: #e2e8f0;">none stored</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">scope</span><span style="color: #e2e8f0;">openid profile email</span></div>
+                </div>
+              </div>
+
+              ${delegationStepsHtml}
 
             </div>
           </div>
           <div style="margin-top: 0.75rem; font-size: 0.65rem; color: #64748b; font-family: monospace;">
-            Flow: User signs in (OIDC) → Web app delegates id_token to Agent → Agent signs ID-JAG with private key → Custom AS validates &amp; mints MCP Access Token → Agent calls MCP with Bearer token.
+            ${interacted
+              ? 'Flow: User signs in (OIDC) → Web app delegates id_token to Agent → Agent signs ID-JAG with private key → Custom AS validates &amp; mints MCP Access Token → Agent calls MCP with Bearer token.'
+              : 'Steps 2–3 (ID-JAG → MCP Access Token) appear here once you send your first message to the agent - only the sign-in flow (steps shown above) has happened so far.'}
           </div>
         </div>
+      `;
 
+      return `
+        ${idJagDiagramHtml}
+        ${showPam ? renderPamArchitectureDiagram(agentTokens.vaultedSecretExchange, { agentClientId, agentName, userDisplayName, userSub }) : ''}
+      `;
+    }
+
+    // Scrollable part of the token modal - the raw token cards. Rendered
+    // into #tokenModalScrollable, which scrolls independently of the fixed
+    // diagrams above it.
+    function renderTokenCards(data) {
+      const { userTokens, agentTokens } = data;
+      const interacted = Boolean(agentTokens?.interacted);
+
+      return `
         <div class="token-section">
           <h3>
             <span style="color: #4ade80;">●</span> User ID Token
@@ -1055,6 +1105,11 @@
           </div>
         </div>
 
+        ${!interacted ? `
+        <div style="margin-top: 1rem; padding: 0.75rem 1rem; background: #1e293b; border-radius: 6px; font-size: 0.75rem; color: #94a3b8;">
+          Steps 2–3 (ID-JAG Token, MCP Access Token) haven't happened yet - send a message to the agent to see them here.
+        </div>
+        ` : `
         <div class="token-section" style="border: 2px solid ${agentTokens?.idJagToken?.error ? '#ef4444' : '#f59e0b'}; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
           <h3>
             <span style="color: ${agentTokens?.idJagToken?.error ? '#ef4444' : '#f59e0b'};">●</span> ID-JAG Token (Step 2)
@@ -1094,11 +1149,154 @@
              ${agentTokens?.mcpAccessToken?.fromOkta ? '<div style="font-size: 0.7rem; color: #4ade80; margin-top: 0.5rem;">✓ From Okta Custom Server</div>' : ''}`
           }
         </div>
+        `}
+
+        ${agentTokens?.vaultedSecretExchange ? `
+        <div class="token-section" style="border: 2px solid #fb7185; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
+          <h3>
+            <span style="color: #fb7185;">●</span> PAM Client Assertion (JWS)
+            <span class="badge" style="background: #881337; color: #fda4af;">ORG → vaulted-secret exchange</span>
+            ${agentTokens.vaultedSecretExchange.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.vaultedSecretExchange.clientAssertion.raw}')">Copy</button>` : ''}
+          </h3>
+          <div style="font-size: 0.75rem; color: #fda4af; margin-bottom: 0.5rem;">
+            Proves the agent's identity for this request - resource: ${escapeHtml(agentTokens.vaultedSecretExchange.resource)}
+          </div>
+          <div class="token-raw">${agentTokens.vaultedSecretExchange.clientAssertion?.raw || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.vaultedSecretExchange.clientAssertion?.parsed)}</div>
+        </div>
+
+        <div class="token-section" style="border: 2px solid #fb7185; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
+          <h3>
+            <span style="color: #fb7185;">●</span> Vaulted-Secret Exchange Response
+            <span class="badge" style="background: #881337; color: #fda4af;">ORG token endpoint · key redacted</span>
+            ${agentTokens.vaultedSecretExchange.rawResponseRedacted ? `<button class="copy-btn" onclick="copyPreContent('pamRawResponsePre')">Copy</button>` : ''}
+          </h3>
+          <div style="font-size: 0.75rem; color: #fda4af; margin-bottom: 0.5rem;">
+            Okta's actual token-exchange response - the key itself is redacted here, but visible in this server's own debug logs (LOG_LEVEL=debug on users-mcp-server) for local debugging.
+          </div>
+          <pre id="pamRawResponsePre" style="background: var(--bg-token-raw); border: 1px solid var(--border-modal); border-radius: 6px; padding: 0.75rem; margin: 0 0 0.75rem 0; font-family: 'SF Mono', Monaco, monospace; font-size: 0.75rem; color: var(--color-token-raw); white-space: pre-wrap; word-break: break-word;">${agentTokens.vaultedSecretExchange.rawResponseRedacted ? escapeHtml(JSON.stringify(agentTokens.vaultedSecretExchange.rawResponseRedacted, null, 2)) : 'Not available'}</pre>
+          <div style="font-size: 0.68rem; color: #94a3b8;">
+            search_users(${escapeHtml(describePamQuery(agentTokens.vaultedSecretExchange.toolInput))}) → ${agentTokens.vaultedSecretExchange.resultCount ?? '—'} result(s)
+          </div>
+        </div>
+        ` : ''}
 
         <div style="margin-top: 1rem; padding: 0.75rem; background: #1e293b; border-radius: 6px; font-size: 0.75rem; color: #94a3b8;">
           <strong>Agent:</strong> ${agentTokens?.agent?.name || 'N/A'} |
           <strong>Client ID:</strong> ${agentTokens?.agent?.clientId || 'N/A'} |
           <strong>Auth:</strong> ${agentTokens?.agent?.authMethod || 'N/A'}
+        </div>
+      `;
+    }
+
+    function describePamQuery(toolInput) {
+      if (!toolInput) return '';
+      return Object.entries(toolInput)
+        .filter(([, v]) => v !== undefined && v !== null && v !== '')
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ');
+    }
+
+    // Only ever called once agentTokens.vaultedSecretExchange is populated -
+    // i.e. after a real search_users call has actually retrieved the key -
+    // so this diagram doesn't need (and no longer has) an empty/placeholder
+    // state; the caller in renderTokenDiagrams omits it entirely until then.
+    function renderPamArchitectureDiagram(pam, { agentClientId, agentName, userDisplayName, userSub }) {
+      const subtitle = `Retrieved ${new Date(pam.requestedAt).toLocaleString()} · search_users(${escapeHtml(describePamQuery(pam.toolInput))}) → ${pam.resultCount ?? '—'} result(s)`;
+
+      return `
+        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #fb7185;">
+          <h3 style="color: #e2e8f0; margin: 0 0 0.25rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Okta Users MCP Server — PAM Vaulted-Secret Exchange</h3>
+          <div style="color: #64748b; font-size: 0.68rem; margin-bottom: 0.75rem;">${subtitle}</div>
+          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
+            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1180px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
+
+              <!-- IDENTITY · USER -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${escapeHtml(userDisplayName)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(userSub)}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">token</span><span style="color: #f59e0b;">raw id_token · reused as subject_token</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: subject_token -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">subject_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #fb7185; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #fb7185; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">raw id_token</div>
+              </div>
+
+              <!-- APP · APP -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">APP</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">APP</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">name</span><span style="color: #e2e8f0;">${escapeHtml(agentName)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">cid</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(agentClientId)}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">creds</span><span style="color: #e2e8f0;">none stored - requests a key per call</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: JWS client_assertion -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">JWS</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #fb7185; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #fb7185; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">client_assertion</div>
+              </div>
+
+              <!-- PAM · VAULTED SECRET (highlighted) -->
+              <div style="flex: 1.15; min-width: 230px; background: #1c1917; border: 2px solid #fb7185; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.08);">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #881337;">
+                  <span style="background: #881337; color: #fda4af; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">PAM</span>
+                  <span style="color: #fda4af; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">VAULTED SECRET</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">requested</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(pam.requestedTokenType)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">resource</span><span style="color: #fda4af; word-break: break-all;">${escapeHtml(pam.resource)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">issued</span><span style="color: #e2e8f0;">${escapeHtml(pam.issuedTokenType || '—')}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">ttl</span><span style="color: #e2e8f0;">${pam.expiresIn ? pam.expiresIn + 's' : '—'}</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: vaulted_secret -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">vaulted_secret</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #fb7185; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #fb7185; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">SSWS · redacted</div>
+              </div>
+
+              <!-- HOST · OKTA USERS API -->
+              <div style="flex: 1; min-width: 210px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">HOST</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">OKTA USERS API</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">target</span><span style="color: #e2e8f0;">/api/v1/users</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">auth</span><span style="color: #e2e8f0;">SSWS {redacted}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">result</span><span style="color: #e2e8f0;">${pam.resultCount ?? '—'} user(s)</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">lifespan</span><span style="color: #e2e8f0;">single call · then discarded</span></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+          <div style="margin-top: 0.75rem; font-size: 0.65rem; color: #64748b; font-family: monospace;">
+            Flow: Agent reuses the user's raw id_token → signs a fresh JWS (private_key_jwt) → exchanges both at Okta ORG for a vaulted secret scoped to the PAM connection → uses the secret once as an SSWS header against the Okta Users API → discards it. No API key is ever cached.
+          </div>
         </div>
       `;
     }
@@ -1150,6 +1348,52 @@
       }).catch(err => {
         console.error('Failed to copy:', err);
       });
+    }
+
+    // Like copyToken, but reads from a <pre>/element's rendered text instead
+    // of inlining the value into the onclick attribute - needed for
+    // multi-line content (e.g. pretty-printed JSON) that would otherwise
+    // break the attribute's quoting.
+    function copyPreContent(elementId) {
+      const el = document.getElementById(elementId);
+      if (el) copyToken(el.textContent);
+    }
+
+    // Red "DEBUG" button next to the OAuth Token Architecture title. Reveals
+    // the real (unredacted) vaulted-secret value in the currently-displayed
+    // "Vaulted-Secret Exchange Response" JSON block, for local debugging
+    // only - see /api/agent/debug-reveal-secret and getLastRevealableSecret()
+    // in users-mcp-server.
+    async function toggleDebugReveal() {
+      const pre = document.getElementById('pamRawResponsePre');
+      if (!pre) {
+        alert('No PAM vaulted-secret exchange to debug yet - ask the agent an Okta user question first.');
+        return;
+      }
+      if (!pre.textContent.includes('REDACTED')) {
+        alert('Already revealed (or nothing to reveal in this response).');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/agent/debug-reveal-secret');
+        const body = await response.json();
+
+        if (!response.ok) {
+          alert('Could not reveal secret: ' + (body.error || `HTTP ${response.status}`));
+          return;
+        }
+
+        const secret = body.data?.secret;
+        if (!secret) {
+          alert('No secret available to reveal.');
+          return;
+        }
+
+        pre.textContent = pre.textContent.replace('REDACTED', secret);
+      } catch (error) {
+        alert('Error revealing secret: ' + error.message);
+      }
     }
 
     // MCP Tools Modal Functions

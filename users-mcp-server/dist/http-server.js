@@ -16,6 +16,7 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { logger } from './utils/logger.js';
 import { searchUsers, SearchUsersSchema } from './tools/search_users.js';
+import { getLastRevealableSecret } from './services/okta-token-exchange.js';
 /**
  * Light sanity check on the incoming ID token: decode it, confirm it's not
  * expired, and confirm the issuer matches this org. We deliberately do NOT
@@ -106,6 +107,19 @@ export async function startHttpServer(port = 8081) {
             logger.error('search-users request failed', { error: error.message });
             return res.status(500).json(createErrorResponse('search-users', error.message));
         }
+    });
+    // Local-debugging-only: reveals the real value of the most recent vaulted
+    // secret exchange, for the webapp's "DEBUG" button in its Token
+    // Architecture viewer. Never exposed by the normal search-users response
+    // or any cache other than the in-memory one in okta-token-exchange.ts -
+    // this is an explicit, separate opt-in path. Still requires a valid raw
+    // ID token, same as search-users.
+    app.get('/api/debug/reveal-secret', extractUserIdToken, (_req, res) => {
+        const last = getLastRevealableSecret();
+        if (!last) {
+            return res.status(404).json(createErrorResponse('debug-reveal-secret', 'No vaulted secret has been retrieved yet this session'));
+        }
+        return res.json(createSuccessResponse('debug-reveal-secret', last));
     });
     app.use((req, res) => {
         res.status(404).json(createErrorResponse('not_found', `Endpoint not found: ${req.path}`));

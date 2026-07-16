@@ -269,6 +269,18 @@ let agentTokenCache = {
 // ID-JAG token cache (per user - agent acting on behalf of user)
 const idJagTokenCache = new Map();
 
+// Most recent PAM vaulted-secret exchange per user (users-mcp-server). This
+// is metadata only - never the secret itself - kept so the "OAuth Token
+// Architecture" viewer can show the real PAM flow after the agent has
+// actually requested a key, instead of just the static ID-JAG diagram.
+const vaultedSecretExchangeCache = new Map();
+
+// Which flow the agent most recently actually used for this user -
+// 'nist-mcp' or 'users-mcp' - set at the same point each respective cache
+// above gets populated. The token viewer uses this to show only the
+// diagram for whichever flow just ran, instead of both at once.
+const lastAgentFlowCache = new Map();
+
 // Get agent access token using client credentials flow with private_key_jwt
 async function getAgentAccessToken(scopes = []) {
   const now = Date.now();
@@ -342,6 +354,7 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
   const cached = idJagTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > now + 60000) {
     console.log('Using cached MCP access token for user:', userId);
+    lastAgentFlowCache.set(userId, 'nist-mcp');
     return cached;
   }
 
@@ -454,6 +467,7 @@ async function getMcpAccessToken(userIdToken, userAccessToken, userId) {
     };
 
     idJagTokenCache.set(cacheKey, result);
+    lastAgentFlowCache.set(userId, 'nist-mcp');
     console.log('✅ Tokens cached for user:', userId, '\n');
 
     return result;
@@ -815,13 +829,23 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
     const user = req.user;
     console.log('=== /api/agent/tokens called for user:', user.id, user.email);
 
-    // Get MCP access token (via ID-JAG exchange - agent on behalf of user)
-    console.log('Getting MCP access token via AI Agent exchange...');
-    const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
-    console.log('Token obtained:', { fromOkta: tokenData.fromOkta });
+    // Read from cache only - never trigger a live ID-JAG/MCP exchange just
+    // because the token viewer was opened. That exchange is a side effect of
+    // an actual /api/chat call, so steps 2/3 stay hidden in the viewer until
+    // the user has really interacted with the agent at least once this
+    // session (idJagTokenCache only gets a successful result, never an
+    // in-progress or failed attempt - see getMcpAccessToken).
+    const tokenData = idJagTokenCache.get(user.id) || null;
+    const interacted = Boolean(tokenData);
+    // Which flow (nist-mcp / users-mcp) actually ran most recently, so the
+    // viewer can show only that one's diagram instead of both at once.
+    const lastFlow = lastAgentFlowCache.get(user.id) || null;
+    console.log('Agent interaction so far this session:', interacted, 'lastFlow:', lastFlow);
 
     res.json({
       description: 'Agent ID Assertion - Token exchange for agent acting on behalf of user',
+      interacted,
+      lastFlow,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -835,19 +859,13 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
       webappClientId: OKTA_CLIENT_ID,
       orgAuthServer: `${OKTA_DOMAIN}/oauth2/v1`,
       customAuthServer: CUSTOM_AUTH_SERVER,
-      error: tokenData.error || false,
-      errorMessage: tokenData.errorMessage || null,
-      errorStep: tokenData.errorStep || null,
-      idJagToken: tokenData.idJagToken ? {
+      idJagToken: tokenData?.idJagToken ? {
         description: 'ID-JAG token from ORG server (step 2)',
         raw: tokenData.idJagToken,
         parsed: parseJwt(tokenData.idJagToken),
         fromOkta: tokenData.fromOkta
-      } : {
-        error: true,
-        message: tokenData.errorStep === 'step1' ? tokenData.errorMessage : 'Not obtained'
-      },
-      mcpAccessToken: tokenData.accessToken ? {
+      } : null,
+      mcpAccessToken: tokenData?.accessToken ? {
         description: 'MCP access token from CUSTOM server (step 3)',
         raw: tokenData.accessToken,
         parsed: tokenData.parsed,
@@ -855,14 +873,61 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
         tokenType: tokenData.tokenType,
         scope: tokenData.scope,
         fromOkta: tokenData.fromOkta
-      } : {
-        error: true,
-        message: tokenData.errorStep === 'step2' ? tokenData.errorMessage : 'Not obtained'
-      }
+      } : null,
+      // Populated only after the agent has actually called search_users at
+      // least once - the PAM vaulted-secret flow is request-triggered, not
+      // pre-fetched like the ID-JAG dance above. The secret itself is never
+      // included, only the exchange metadata.
+      vaultedSecretExchange: (() => {
+        const cached = vaultedSecretExchangeCache.get(user.id);
+        if (!cached) return null;
+        return {
+          description: 'PAM vaulted-secret exchange for users-mcp-server (search_users)',
+          requestedAt: cached.requestedAt,
+          toolInput: cached.toolInput,
+          resultCount: cached.resultCount,
+          success: cached.success,
+          usersMcpServerUrl: cached.usersMcpServerUrl,
+          tokenEndpoint: cached.pamExchange.tokenEndpoint,
+          resource: cached.pamExchange.resource,
+          requestedTokenType: cached.pamExchange.requestedTokenType,
+          issuedTokenType: cached.pamExchange.issuedTokenType,
+          subjectTokenType: cached.pamExchange.subjectTokenType,
+          expiresIn: cached.pamExchange.expiresIn,
+          clientAssertion: {
+            raw: cached.pamExchange.clientAssertion,
+            parsed: parseJwt(cached.pamExchange.clientAssertion)
+          },
+          // Okta's actual token-exchange response, verbatim, with only the
+          // secret value inside vaulted_secret swapped for "REDACTED" - see
+          // redactVaultedSecretResponse() in users-mcp-server. The real key
+          // is not included here; it's only ever sent to the browser via the
+          // explicit "DEBUG" button, which hits /api/agent/debug-reveal-secret
+          // below - a separate, deliberate opt-in action.
+          rawResponseRedacted: cached.pamExchange.rawResponseRedacted
+        };
+      })()
     });
   } catch (error) {
     console.error('Error in /api/agent/tokens:', error);
     res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
+
+// Local-debugging-only: proxies to users-mcp-server's own debug endpoint to
+// reveal the real value of the most recent PAM vaulted-secret exchange, for
+// the "DEBUG" button in the Token Architecture viewer. Explicit opt-in
+// action only - never included in the normal /api/agent/tokens response.
+app.get('/api/agent/debug-reveal-secret', ensureAuthenticated, async (req, res) => {
+  try {
+    const user = req.user;
+    const response = await fetch(`${USERS_MCP_SERVER_URL}/api/debug/reveal-secret`, {
+      headers: { 'Authorization': `Bearer ${user.idToken}` }
+    });
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1035,7 +1100,7 @@ async function executeMcpTool(toolName, toolInput, idJagToken) {
 // passes the user's RAW ID token as Bearer - users-mcp-server needs it as
 // the subject_token for its own vaulted-secret exchange (fetched fresh on
 // every call, no caching).
-async function executeUsersMcpTool(toolInput, userIdToken) {
+async function executeUsersMcpTool(toolInput, userIdToken, userId) {
   try {
     console.log('Executing users-mcp-server tool: search_users');
 
@@ -1051,6 +1116,20 @@ async function executeUsersMcpTool(toolInput, userIdToken) {
     const result = await response.json();
     console.log('Tool search_users completed:', result.success ? 'SUCCESS' : 'FAILED');
 
+    // Record the PAM exchange metadata (never the secret) so the Token
+    // Architecture viewer can show the real flow the agent just ran.
+    if (result.data?.pamExchange) {
+      lastAgentFlowCache.set(userId, 'users-mcp');
+      vaultedSecretExchangeCache.set(userId, {
+        pamExchange: result.data.pamExchange,
+        requestedAt: result.data.pamExchange.fetchedAt || new Date().toISOString(),
+        toolInput,
+        resultCount: result.data.count ?? null,
+        success: Boolean(result.data.success),
+        usersMcpServerUrl: USERS_MCP_SERVER_URL
+      });
+    }
+
     return result;
   } catch (error) {
     console.error('Tool search_users error:', error);
@@ -1065,16 +1144,6 @@ app.post('/api/chat', ensureAuthenticated, async (req, res) => {
     const user = req.user;
 
     console.log(`\n=== Chat Request from ${user.email} ===`);
-
-    // Get MCP access token (via ID-JAG exchange)
-    let mcpAccessToken = null;
-    try {
-      const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
-      mcpAccessToken = tokenData.accessToken;
-      console.log('MCP access token obtained (via ID-JAG)');
-    } catch (e) {
-      console.error('Failed to get MCP access token:', e.message);
-    }
 
     // Get MCP tools
     const tools = await getMcpToolsForClaude();
@@ -1133,9 +1202,25 @@ Use these tools to provide accurate, data-driven answers.`;
         console.log(`  Tool: ${toolUse.name}`);
         console.log(`  Input:`, JSON.stringify(toolUse.input));
 
-        const toolResult = toolUse.name === 'search_users'
-          ? await executeUsersMcpTool(toolUse.input, user.idToken)
-          : await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
+        // ID-JAG exchange is fetched lazily, right here, only when a NIST
+        // MCP tool is actually about to be called - mirroring the PAM
+        // exchange's own on-demand pattern. This keeps idJagTokenCache
+        // (and lastAgentFlowCache) from getting populated by chat messages
+        // that never touch the NIST MCP server.
+        let toolResult;
+        if (toolUse.name === 'search_users') {
+          toolResult = await executeUsersMcpTool(toolUse.input, user.idToken, user.id);
+        } else {
+          let mcpAccessToken = null;
+          try {
+            const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
+            mcpAccessToken = tokenData.accessToken;
+            console.log('MCP access token obtained (via ID-JAG)');
+          } catch (e) {
+            console.error('Failed to get MCP access token:', e.message);
+          }
+          toolResult = await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
+        }
 
         toolResults.push({
           type: 'tool_result',

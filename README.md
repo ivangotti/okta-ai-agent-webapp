@@ -27,9 +27,10 @@ cd okta-ai-agent-webapp
 # 2. Setup everything
 npm run setup:all
 
-# 3. Configure environment
+# 3. Configure environment - there are TWO separate .env files, see below
 cp .env.example .env
-# Edit .env with your Okta and LiteLLM credentials
+cp users-mcp-server/.env.example users-mcp-server/.env
+# Edit both with your Okta and LiteLLM credentials
 
 # 4. Start all three services (webapp + both MCP servers, via concurrently)
 npm start
@@ -39,6 +40,15 @@ npm start
 - 🌐 Webapp: http://localhost:3001
 - 🔧 NIST CSF 2.0 MCP Server: http://localhost:8080
 - 🔐 Okta Users MCP Server: http://localhost:8081
+
+> ⚠️ **Two separate `.env` files - don't look for everything in one place.** Each service owns its own config:
+>
+> | File | Owns |
+> |---|---|
+> | `.env` (repo root) | Webapp: Okta SSO, LiteLLM, `AGENT_CLIENT_ID`, `USERS_MCP_SERVER_URL`, `MCP_SERVER_URL` |
+> | `users-mcp-server/.env` | Users MCP server: `OKTA_DOMAIN`, `AGENT_CLIENT_ID` (reused), and **`VAULTED_SECRET_RESOURCE_ORN`** - the PAM connection's ORN. This is *not* in the root `.env`. |
+>
+> `nist-mcp-server` has no `.env` of its own and does **not** read the root one either - `concurrently` spawns it as a separate OS process that only inherits your shell's actual environment, not variables `dotenv` loaded into the webapp's own process. In practice this doesn't matter today because its only overridable vars (`MCP_AUDIENCE`, `HTTP_PORT`, `CORS_ORIGIN`, `RATE_LIMIT`) have hardcoded defaults matching the root `.env.example` - but if you ever change `MCP_AUDIENCE` in the root `.env`, `export` it in your shell before running `npm start`, since editing the root `.env` file alone won't reach `nist-mcp-server`.
 
 ---
 
