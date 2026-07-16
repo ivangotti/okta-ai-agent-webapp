@@ -5,6 +5,105 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NIST CSF 2.0 AI Agent</title>
   <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg-body:        #1a1a2e;
+      --bg-header:      #16213e;
+      --bg-border:      #0f3460;
+      --bg-user-info:   #0f3460;
+      --bg-msg-user:    #0f3460;
+      --bg-msg-asst:    #222244;
+      --border-msg-asst:#333366;
+      --bg-input-area:  #16213e;
+      --bg-textarea:    #0f0f23;
+      --border-textarea:#333;
+      --bg-suggestion:  #0f3460;
+      --border-sugg:    #1e4976;
+      --bg-sugg-hover:  #1e4976;
+      --bg-loading:     #1a1a2e;
+      --bg-modal:       #1e293b;
+      --bg-modal-hdr:   #0f172a;
+      --border-modal:   #334155;
+      --bg-token-raw:   #0f172a;
+      --bg-token-key:   #1e293b;
+      --bg-copy-btn:    #334155;
+      --bg-copy-hover:  #475569;
+      --bg-tool-call:   #1e3a5f;
+      --bg-msg-pre:     #0a0a15;
+      --bg-logout-hover:#334155;
+      --border-logout:  #475569;
+      --color-text:     #eee;
+      --color-muted:    #888;
+      --color-user-name:#e2e8f0;
+      --color-logout:   #94a3b8;
+      --color-token-raw:#94a3b8;
+      --color-token-val:#e2e8f0;
+      --color-copy:     #94a3b8;
+      --color-modal-h2: #f1f5f9;
+      --color-modal-x:  #94a3b8;
+      --spinner-track:  #333;
+      --transition-theme: background 0.25s, color 0.25s, border-color 0.25s;
+    }
+
+    html.light {
+      --bg-body:        #f0f4f8;
+      --bg-header:      #ffffff;
+      --bg-border:      #c8d6e8;
+      --bg-user-info:   #dde8f5;
+      --bg-msg-user:    #2563eb;
+      --bg-msg-asst:    #ffffff;
+      --border-msg-asst:#c8d6e8;
+      --bg-input-area:  #ffffff;
+      --bg-textarea:    #f8fafc;
+      --border-textarea:#c8d6e8;
+      --bg-suggestion:  #dde8f5;
+      --border-sugg:    #b0c8e8;
+      --bg-sugg-hover:  #b0c8e8;
+      --bg-loading:     #f0f4f8;
+      --bg-modal:       #ffffff;
+      --bg-modal-hdr:   #f0f4f8;
+      --border-modal:   #c8d6e8;
+      --bg-token-raw:   #f0f4f8;
+      --bg-token-key:   #eef3f9;
+      --bg-copy-btn:    #dde8f5;
+      --bg-copy-hover:  #b0c8e8;
+      --bg-tool-call:   #dde8f5;
+      --bg-msg-pre:     #f0f4f8;
+      --bg-logout-hover:#dde8f5;
+      --border-logout:  #b0c8e8;
+      --color-text:     #1e293b;
+      --color-muted:    #64748b;
+      --color-user-name:#1e293b;
+      --color-logout:   #475569;
+      --color-token-raw:#475569;
+      --color-token-val:#1e293b;
+      --color-copy:     #475569;
+      --color-modal-h2: #1e293b;
+      --color-modal-x:  #64748b;
+      --spinner-track:  #c8d6e8;
+    }
+
+    /* ── Theme toggle button ── */
+    .theme-toggle {
+      background: transparent;
+      border: 1px solid var(--border-logout);
+      color: var(--color-logout);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: var(--transition-theme);
+      flex-shrink: 0;
+    }
+    .theme-toggle:hover {
+      background: var(--bg-logout-hover);
+      color: var(--color-user-name);
+    }
+
     * {
       margin: 0;
       padding: 0;
@@ -13,20 +112,22 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #eee;
+      background: var(--bg-body);
+      color: var(--color-text);
       height: 100vh;
       display: flex;
       flex-direction: column;
+      transition: var(--transition-theme);
     }
 
     header {
-      background: #16213e;
+      background: var(--bg-header);
       padding: 1rem 2rem;
-      border-bottom: 1px solid #0f3460;
+      border-bottom: 1px solid var(--bg-border);
       display: flex;
       align-items: center;
       gap: 1rem;
+      transition: var(--transition-theme);
     }
 
     header h1 {
@@ -46,7 +147,7 @@
       align-items: center;
       gap: 0.5rem;
       font-size: 0.85rem;
-      color: #888;
+      color: var(--color-muted);
     }
 
     .status .dot {
@@ -65,9 +166,10 @@
       align-items: center;
       gap: 0.75rem;
       padding: 0.4rem 0.75rem;
-      background: #0f3460;
+      background: var(--bg-user-info);
       border-radius: 20px;
       font-size: 0.85rem;
+      transition: var(--transition-theme);
     }
 
     .user-avatar {
@@ -84,7 +186,7 @@
     }
 
     .user-name {
-      color: #e2e8f0;
+      color: var(--color-user-name);
       max-width: 150px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -93,8 +195,8 @@
 
     .logout-btn {
       background: transparent;
-      border: 1px solid #475569;
-      color: #94a3b8;
+      border: 1px solid var(--border-logout);
+      color: var(--color-logout);
       padding: 0.3rem 0.6rem;
       border-radius: 4px;
       font-size: 0.75rem;
@@ -103,8 +205,8 @@
     }
 
     .logout-btn:hover {
-      background: #334155;
-      color: #e2e8f0;
+      background: var(--bg-logout-hover);
+      color: var(--color-user-name);
     }
 
     .chat-container {
@@ -121,30 +223,31 @@
       padding: 1rem 1.25rem;
       border-radius: 12px;
       line-height: 1.5;
+      transition: var(--transition-theme);
     }
 
     .message.user {
       align-self: flex-end;
-      background: #0f3460;
+      background: var(--bg-msg-user);
       color: #fff;
     }
 
     .message.assistant {
       align-self: flex-start;
-      background: #222244;
-      border: 1px solid #333366;
+      background: var(--bg-msg-asst);
+      border: 1px solid var(--border-msg-asst);
     }
 
     .message.system {
       align-self: center;
       background: transparent;
-      color: #888;
+      color: var(--color-muted);
       font-size: 0.85rem;
       padding: 0.5rem;
     }
 
     .message pre {
-      background: #0a0a15;
+      background: var(--bg-msg-pre);
       padding: 0.75rem;
       border-radius: 6px;
       overflow-x: auto;
@@ -157,7 +260,7 @@
     }
 
     .tool-call {
-      background: #1e3a5f;
+      background: var(--bg-tool-call);
       border-left: 3px solid #3b82f6;
       padding: 0.5rem 0.75rem;
       margin: 0.5rem 0;
@@ -171,9 +274,10 @@
     }
 
     .input-area {
-      background: #16213e;
+      background: var(--bg-input-area);
       padding: 1rem 2rem;
-      border-top: 1px solid #0f3460;
+      border-top: 1px solid var(--bg-border);
+      transition: var(--transition-theme);
     }
 
     .input-wrapper {
@@ -185,16 +289,17 @@
 
     .input-wrapper textarea {
       flex: 1;
-      background: #0f0f23;
-      border: 1px solid #333;
+      background: var(--bg-textarea);
+      border: 1px solid var(--border-textarea);
       border-radius: 8px;
       padding: 0.75rem 1rem;
-      color: #fff;
+      color: var(--color-text);
       font-size: 1rem;
       font-family: inherit;
       resize: none;
       min-height: 48px;
       max-height: 200px;
+      transition: var(--transition-theme);
     }
 
     .input-wrapper textarea:focus {
@@ -218,7 +323,7 @@
     }
 
     .input-wrapper button:disabled {
-      background: #333;
+      background: var(--spinner-track);
       cursor: not-allowed;
     }
 
@@ -231,7 +336,7 @@
     .typing-indicator span {
       width: 8px;
       height: 8px;
-      background: #666;
+      background: var(--color-muted);
       border-radius: 50%;
       animation: bounce 1.4s infinite ease-in-out;
     }
@@ -252,9 +357,9 @@
     }
 
     .suggestion {
-      background: #0f3460;
-      border: 1px solid #1e4976;
-      color: #94a3b8;
+      background: var(--bg-suggestion);
+      border: 1px solid var(--border-sugg);
+      color: var(--color-muted);
       padding: 0.4rem 0.75rem;
       border-radius: 16px;
       font-size: 0.8rem;
@@ -263,14 +368,14 @@
     }
 
     .suggestion:hover {
-      background: #1e4976;
-      color: #fff;
+      background: var(--bg-sugg-hover);
+      color: var(--color-text);
     }
 
     .loading-screen {
       position: fixed;
       inset: 0;
-      background: #1a1a2e;
+      background: var(--bg-loading);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -288,7 +393,7 @@
     .loading-spinner {
       width: 40px;
       height: 40px;
-      border: 3px solid #333;
+      border: 3px solid var(--spinner-track);
       border-top-color: #3b82f6;
       border-radius: 50%;
       animation: spin 1s linear infinite;
@@ -319,7 +424,7 @@
     }
 
     .modal {
-      background: #1e293b;
+      background: var(--bg-modal);
       border-radius: 12px;
       width: 90%;
       max-width: 800px;
@@ -328,6 +433,7 @@
       display: flex;
       flex-direction: column;
       box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      transition: var(--transition-theme);
     }
 
     .modal-header {
@@ -335,20 +441,21 @@
       align-items: center;
       justify-content: space-between;
       padding: 1rem 1.5rem;
-      border-bottom: 1px solid #334155;
-      background: #0f172a;
+      border-bottom: 1px solid var(--border-modal);
+      background: var(--bg-modal-hdr);
+      transition: var(--transition-theme);
     }
 
     .modal-header h2 {
       font-size: 1.1rem;
       font-weight: 600;
-      color: #f1f5f9;
+      color: var(--color-modal-h2);
     }
 
     .modal-close {
       background: transparent;
       border: none;
-      color: #94a3b8;
+      color: var(--color-modal-x);
       font-size: 1.5rem;
       cursor: pointer;
       padding: 0.25rem;
@@ -356,7 +463,7 @@
     }
 
     .modal-close:hover {
-      color: #f1f5f9;
+      color: var(--color-modal-h2);
     }
 
     .modal-body {
@@ -393,24 +500,26 @@
     }
 
     .token-raw {
-      background: #0f172a;
-      border: 1px solid #334155;
+      background: var(--bg-token-raw);
+      border: 1px solid var(--border-modal);
       border-radius: 6px;
       padding: 0.75rem;
       margin-bottom: 0.75rem;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 0.75rem;
       word-break: break-all;
-      color: #94a3b8;
+      color: var(--color-token-raw);
       max-height: 80px;
       overflow-y: auto;
+      transition: var(--transition-theme);
     }
 
     .token-parsed {
-      background: #0f172a;
-      border: 1px solid #334155;
+      background: var(--bg-token-raw);
+      border: 1px solid var(--border-modal);
       border-radius: 6px;
       overflow: hidden;
+      transition: var(--transition-theme);
     }
 
     .token-parsed pre {
@@ -418,13 +527,13 @@
       margin: 0;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 0.8rem;
-      color: #e2e8f0;
+      color: var(--color-token-val);
       overflow-x: auto;
     }
 
     .token-claim {
       display: flex;
-      border-bottom: 1px solid #334155;
+      border-bottom: 1px solid var(--border-modal);
       font-size: 0.85rem;
     }
 
@@ -436,17 +545,18 @@
       width: 140px;
       flex-shrink: 0;
       padding: 0.5rem 0.75rem;
-      background: #1e293b;
+      background: var(--bg-token-key);
       color: #60a5fa;
       font-weight: 500;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 0.8rem;
+      transition: var(--transition-theme);
     }
 
     .token-claim-value {
       flex: 1;
       padding: 0.5rem 0.75rem;
-      color: #e2e8f0;
+      color: var(--color-token-val);
       word-break: break-all;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 0.8rem;
@@ -462,19 +572,122 @@
     }
 
     .copy-btn {
-      background: #334155;
+      background: var(--bg-copy-btn);
       border: none;
-      color: #94a3b8;
+      color: var(--color-copy);
       padding: 0.25rem 0.5rem;
       border-radius: 4px;
       font-size: 0.7rem;
       cursor: pointer;
       margin-left: auto;
+      transition: var(--transition-theme);
     }
 
     .copy-btn:hover {
-      background: #475569;
-      color: #e2e8f0;
+      background: var(--bg-copy-hover);
+      color: var(--color-token-val);
+    }
+
+    /* ── MCP Server Status & Tools modal ── */
+    .mcp-server-card {
+      background: var(--bg-token-raw);
+      border: 1px solid var(--border-modal);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      transition: var(--transition-theme);
+    }
+
+    .mcp-server-card:last-child {
+      margin-bottom: 0;
+    }
+
+    .mcp-server-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+      gap: 0.5rem;
+    }
+
+    .mcp-server-name {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--color-token-val);
+    }
+
+    .mcp-server-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.8rem;
+      color: var(--color-token-val);
+      white-space: nowrap;
+    }
+
+    .mcp-server-badge .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+      flex-shrink: 0;
+    }
+
+    .mcp-server-badge .dot.error {
+      background: #f87171;
+    }
+
+    .mcp-server-meta {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.4rem;
+      font-size: 0.8rem;
+      color: var(--color-token-raw);
+      margin-bottom: 0.75rem;
+    }
+
+    .mcp-server-meta strong {
+      color: var(--color-token-val);
+    }
+
+    .mcp-server-meta a {
+      color: #60a5fa;
+    }
+
+    .mcp-server-error {
+      grid-column: 1 / -1;
+      color: #f87171;
+    }
+
+    .mcp-tools-list {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .mcp-tool-item {
+      background: var(--bg-token-key);
+      padding: 0.6rem 0.75rem;
+      border-radius: 6px;
+      border-left: 3px solid #3b82f6;
+      transition: var(--transition-theme);
+    }
+
+    .mcp-tool-name {
+      font-weight: 600;
+      color: #60a5fa;
+      font-size: 0.85rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .mcp-tool-desc {
+      font-size: 0.78rem;
+      color: var(--color-token-raw);
+    }
+
+    .mcp-empty {
+      font-size: 0.85rem;
+      color: var(--color-token-raw);
+      font-style: italic;
     }
   </style>
 </head>
@@ -519,6 +732,7 @@
         <span class="dot" id="statusDot"></span>
         <span id="statusText">Connecting...</span>
       </div>
+      <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark mode">🌙</button>
       <div class="user-info" id="userInfo" style="display: none;">
         <div class="user-avatar" id="userAvatar">?</div>
         <span class="user-name user-name-clickable" id="userName" onclick="showTokens()" title="Click to view tokens">Loading...</span>
@@ -554,6 +768,33 @@
   </div>
 
   <script>
+    // ── Theme ──
+    const themeToggle = document.getElementById('themeToggle');
+
+    function isDaytime() {
+      const h = new Date().getHours();
+      return h >= 6 && h < 18;
+    }
+
+    function applyTheme(light) {
+      document.documentElement.classList.toggle('light', light);
+      themeToggle.textContent = light ? '🌙' : '☀️';
+      themeToggle.title = light ? 'Switch to dark mode' : 'Switch to light mode';
+      try { localStorage.setItem('theme', light ? 'light' : 'dark'); } catch (_) {}
+    }
+
+    function toggleTheme() {
+      applyTheme(!document.documentElement.classList.contains('light'));
+    }
+
+    // Init: prefer saved preference, fall back to time of day
+    (function initTheme() {
+      let saved;
+      try { saved = localStorage.getItem('theme'); } catch (_) {}
+      applyTheme(saved ? saved === 'light' : isDaytime());
+    })();
+
+    // ── App ──
     const chatContainer = document.getElementById('chatContainer');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
@@ -912,48 +1153,66 @@
     }
 
     // MCP Tools Modal Functions
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str ?? '';
+      return div.innerHTML;
+    }
+
+    // Renders one card per registered MCP server (see MCP_SERVERS in
+    // server.js / GET /api/mcp-servers) - adding a new MCP server needs no
+    // frontend changes, it just shows up here.
+    function renderMcpServerCard(server) {
+      const toolsHtml = (server.tools || []).map(tool => `
+        <div class="mcp-tool-item">
+          <div class="mcp-tool-name">${escapeHtml(tool.name)}</div>
+          <div class="mcp-tool-desc">${escapeHtml(tool.description || 'No description')}</div>
+        </div>
+      `).join('') || '<p class="mcp-empty">No tools available.</p>';
+
+      return `
+        <div class="mcp-server-card">
+          <div class="mcp-server-card-header">
+            <span class="mcp-server-name">${escapeHtml(server.name)}</span>
+            <span class="mcp-server-badge">
+              <span class="dot ${server.online ? '' : 'error'}"></span>
+              ${server.online ? 'Online' : 'Offline'}
+            </span>
+          </div>
+          <div class="mcp-server-meta">
+            <div><strong>Tools:</strong> ${server.toolsCount ?? 0}</div>
+            <div><strong>Mode:</strong> ${escapeHtml(server.mode || 'N/A')}</div>
+            <div style="grid-column: 1 / -1;"><strong>URL:</strong> <a href="${escapeHtml(server.url)}" target="_blank">${escapeHtml(server.url)}</a></div>
+            ${server.error ? `<div class="mcp-server-error"><strong>Error:</strong> ${escapeHtml(server.error)}</div>` : ''}
+          </div>
+          <div class="mcp-tools-list">${toolsHtml}</div>
+        </div>
+      `;
+    }
+
     async function showMcpTools() {
       const modal = document.getElementById('mcpModal');
       const modalBody = document.getElementById('mcpModalBody');
 
       modal.classList.add('visible');
-      modalBody.innerHTML = '<p>Loading MCP tools...</p>';
+      modalBody.innerHTML = '<p>Loading MCP servers...</p>';
 
       try {
-        const [healthRes, toolsRes] = await Promise.all([
-          fetch('/api/health'),
-          fetch(`${window.location.origin.replace('3001', '8080')}/api/tools`)
-        ]);
+        const response = await fetch('/api/mcp-servers');
 
-        const health = await healthRes.json();
-        const tools = toolsRes.ok ? await toolsRes.json() : { tools: [] };
+        if (response.status === 401) {
+          window.location.href = '/session-expired?reason=Your session has expired. Please log in again.';
+          return;
+        }
 
-        const mcpUrl = new URL(window.location.origin.replace('3001', '8080'));
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
-        modalBody.innerHTML = `
-          <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0f172a; border-radius: 8px;">
-            <h3 style="color: #4ade80; margin-bottom: 0.75rem;">MCP Server Status</h3>
-            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; font-size: 0.85rem;">
-              <div><strong>Status:</strong> ${health.mcp?.status || 'Unknown'}</div>
-              <div><strong>Tools:</strong> ${health.mcp?.tools_available || 0}</div>
-              <div><strong>Version:</strong> ${health.mcp?.version || 'N/A'}</div>
-              <div><strong>Mode:</strong> ${health.mcp?.mode || 'N/A'}</div>
-              <div><strong>Host:</strong> ${mcpUrl.hostname}</div>
-              <div><strong>Port:</strong> ${mcpUrl.port}</div>
-              <div style="grid-column: 1 / -1;"><strong>URL:</strong> <a href="${mcpUrl.href}" target="_blank" style="color: #60a5fa;">${mcpUrl.href}</a></div>
-            </div>
-          </div>
+        const data = await response.json();
+        const servers = data.servers || [];
 
-          <h3 style="color: #60a5fa; margin-bottom: 0.75rem;">Available Tools (${tools.tools?.length || 0})</h3>
-          <div style="display: grid; gap: 0.5rem;">
-            ${(tools.tools || []).map(tool => `
-              <div style="background: #1e293b; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #3b82f6;">
-                <div style="font-weight: 600; color: #60a5fa; margin-bottom: 0.25rem;">${tool.name}</div>
-                <div style="font-size: 0.8rem; color: #94a3b8;">${tool.description || 'No description'}</div>
-              </div>
-            `).join('')}
-          </div>
-        `;
+        modalBody.innerHTML = servers.length > 0
+          ? servers.map(renderMcpServerCard).join('')
+          : '<p class="mcp-empty">No MCP servers configured.</p>';
       } catch (error) {
         modalBody.innerHTML = `<p style="color: #f87171;">Error: ${error.message}</p>`;
       }

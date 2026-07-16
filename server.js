@@ -70,6 +70,15 @@ const app = express();
 let LITELLM_BASE_URL = process.env.ANTHROPIC_BASE_URL || null;
 const LITELLM_SITE = process.env.LITELLM_SITE || null;
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:8080';
+const USERS_MCP_SERVER_URL = process.env.USERS_MCP_SERVER_URL || 'http://localhost:8081';
+
+// Registry of all MCP servers this webapp talks to. Add an entry here when
+// wiring in a new MCP server - the "MCP Server Status & Tools" UI and its
+// backing endpoint (/api/mcp-servers) are both driven by this list.
+const MCP_SERVERS = [
+  { key: 'nist', name: 'NIST CSF 2.0 MCP Server', url: MCP_SERVER_URL },
+  { key: 'users', name: 'Okta Users MCP Server', url: USERS_MCP_SERVER_URL }
+];
 
 // ─── Okta Credential Manager (OCM) ───────────────────────────────────────────
 // Shells out to `ocm auth litellm --format json`, caches the bundle,
@@ -929,17 +938,32 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
+// search_users is served by users-mcp-server, independently of the NIST MCP server
+const USERS_MCP_TOOL_DEFINITION = {
+  name: 'search_users',
+  description: 'Search Okta users by first name, last name, and/or email',
+  input_schema: {
+    type: 'object',
+    properties: {
+      firstName: { type: 'string', description: 'First name to search for' },
+      lastName: { type: 'string', description: 'Last name to search for' },
+      email: { type: 'string', description: 'Email address to search for' },
+      limit: { type: 'number', description: 'Maximum results (1-200)', default: 20 }
+    }
+  }
+};
+
 // Get MCP tools in Anthropic format
 async function getMcpToolsForClaude() {
+  const toolDefinitions = [USERS_MCP_TOOL_DEFINITION];
+
   try {
     const response = await fetch(`${MCP_SERVER_URL}/api/tools`);
-    if (!response.ok) return [];
-
-    const data = await response.json();
+    if (!response.ok) return toolDefinitions;
 
     // Convert simple tool list to full tool definitions
     // For now, return a subset of most useful tools
-    const toolDefinitions = [
+    toolDefinitions.push(
       {
         name: 'csf_lookup',
         description: 'Look up NIST CSF elements by identifier (function, category, or subcategory ID)',
@@ -973,12 +997,12 @@ async function getMcpToolsForClaude() {
           required: ['subcategory_id']
         }
       }
-    ];
+    );
 
     return toolDefinitions;
   } catch (error) {
     console.error('Failed to get MCP tools:', error);
-    return [];
+    return toolDefinitions;
   }
 }
 
@@ -1002,6 +1026,34 @@ async function executeMcpTool(toolName, toolInput, idJagToken) {
     return result;
   } catch (error) {
     console.error(`Tool ${toolName} error:`, error);
+    return { error: error.message };
+  }
+}
+
+// Execute the search_users tool against users-mcp-server.
+// Unlike executeMcpTool (which uses the ID-JAG/MCP access token), this
+// passes the user's RAW ID token as Bearer - users-mcp-server needs it as
+// the subject_token for its own vaulted-secret exchange (fetched fresh on
+// every call, no caching).
+async function executeUsersMcpTool(toolInput, userIdToken) {
+  try {
+    console.log('Executing users-mcp-server tool: search_users');
+
+    const response = await fetch(`${USERS_MCP_SERVER_URL}/api/tools/search-users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userIdToken}`  // Raw user ID token, not ID-JAG!
+      },
+      body: JSON.stringify(toolInput)
+    });
+
+    const result = await response.json();
+    console.log('Tool search_users completed:', result.success ? 'SUCCESS' : 'FAILED');
+
+    return result;
+  } catch (error) {
+    console.error('Tool search_users error:', error);
     return { error: error.message };
   }
 }
@@ -1031,12 +1083,13 @@ app.post('/api/chat', ensureAuthenticated, async (req, res) => {
     // System prompt
     const systemPrompt = `You are the ${AGENT_NAME}, an AI Agent helping ${user.displayName || user.email}.
 
-You have access to ${tools.length} MCP tools to query the NIST Cybersecurity Framework 2.0 database:
-- csf_lookup: Look up specific framework elements
-- search_framework: Search for keywords and concepts
-- get_assessment_questions: Get assessment questions for subcategories
+You have access to ${tools.length} MCP tools:
+- csf_lookup: Look up specific NIST CSF 2.0 framework elements
+- search_framework: Search the NIST CSF 2.0 framework for keywords and concepts
+- get_assessment_questions: Get NIST CSF 2.0 assessment questions for subcategories
+- search_users: Search Okta users by first name, last name, and/or email
 
-Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
+Use these tools to provide accurate, data-driven answers.`;
 
     const requestBody = {
       model: MODEL,
@@ -1080,7 +1133,9 @@ Use these tools to provide accurate, data-driven answers about NIST CSF 2.0.`;
         console.log(`  Tool: ${toolUse.name}`);
         console.log(`  Input:`, JSON.stringify(toolUse.input));
 
-        const toolResult = await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
+        const toolResult = toolUse.name === 'search_users'
+          ? await executeUsersMcpTool(toolUse.input, user.idToken)
+          : await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
 
         toolResults.push({
           type: 'tool_result',
@@ -1137,6 +1192,55 @@ app.get('/api/tools', ensureAuthenticated, async (req, res) => {
   } catch (error) {
     res.json({ tools: [], count: 0, error: error.message });
   }
+});
+
+// Status + tool inventory for every registered MCP server. Drives the
+// "MCP Server Status & Tools" modal - add a server to MCP_SERVERS and it
+// shows up here automatically.
+app.get('/api/mcp-servers', ensureAuthenticated, async (req, res) => {
+  const servers = await Promise.all(MCP_SERVERS.map(async (server) => {
+    try {
+      const [healthRes, toolsRes] = await Promise.all([
+        fetch(`${server.url}/health`),
+        fetch(`${server.url}/api/tools`)
+      ]);
+
+      if (!healthRes.ok) {
+        throw new Error(`Health check failed: ${healthRes.status}`);
+      }
+
+      const health = await healthRes.json();
+      const toolsData = toolsRes.ok ? await toolsRes.json() : { tools: [] };
+
+      return {
+        key: server.key,
+        name: server.name,
+        url: server.url,
+        online: true,
+        status: health.status || 'unknown',
+        version: health.version || null,
+        mode: health.mode || null,
+        toolsCount: toolsData.tools?.length ?? health.tools_available ?? 0,
+        tools: toolsData.tools || [],
+        error: null
+      };
+    } catch (error) {
+      return {
+        key: server.key,
+        name: server.name,
+        url: server.url,
+        online: false,
+        status: 'offline',
+        version: null,
+        mode: null,
+        toolsCount: 0,
+        tools: [],
+        error: error.message
+      };
+    }
+  }));
+
+  res.json({ servers });
 });
 
 // Serve static files

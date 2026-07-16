@@ -70,7 +70,7 @@ export class SecurityLogger {
         winston.format.errors({ stack: true }),
         winston.format.json()
       ),
-      defaultMeta: { service: 'mcp-server' },
+      defaultMeta: { service: 'nist-mcp-server' },
       transports: [
         // Console transport for development
         new winston.transports.Console({

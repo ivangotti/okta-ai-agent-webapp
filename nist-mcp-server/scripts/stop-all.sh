@@ -28,7 +28,7 @@ lsof -ti:8080 | xargs kill -9 2>/dev/null && echo -e "${GREEN}[STOPPED]${NC} Pro
 lsof -ti:3001 | xargs kill -9 2>/dev/null && echo -e "${GREEN}[STOPPED]${NC} Process on port 3001" || true
 
 # Clean up log files
-rm -f /tmp/mcp-server.log /tmp/webapp.log
+rm -f /tmp/nist-mcp-server.log /tmp/webapp.log
 
 echo -e "${GREEN}[DONE]${NC} All services stopped"
 echo ""

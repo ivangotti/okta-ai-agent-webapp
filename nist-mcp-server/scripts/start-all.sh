@@ -38,7 +38,7 @@ sleep 1
 # Start MCP HTTP Server
 echo -e "${BLUE}[STARTING]${NC} MCP HTTP Server on port 8080..."
 cd "$PROJECT_ROOT"
-node dist/http-server.js > /tmp/mcp-server.log 2>&1 &
+node dist/http-server.js > /tmp/nist-mcp-server.log 2>&1 &
 MCP_PID=$!
 echo -e "${GREEN}[STARTED]${NC} MCP Server PID: $MCP_PID"
 
@@ -101,7 +101,7 @@ echo -e "${GREEN}║${NC}  → Start chatting about NIST CSF 2.0!               
 echo -e "${GREEN}║${NC}                                                                    ${GREEN}║${NC}"
 echo -e "${GREEN}╠════════════════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  ${BOLD}Logs:${NC}                                                             ${GREEN}║${NC}"
-echo -e "${GREEN}║${NC}  → MCP Server:  ${YELLOW}tail -f /tmp/mcp-server.log${NC}                       ${GREEN}║${NC}"
+echo -e "${GREEN}║${NC}  → MCP Server:  ${YELLOW}tail -f /tmp/nist-mcp-server.log${NC}                       ${GREEN}║${NC}"
 echo -e "${GREEN}║${NC}  → Webapp:      ${YELLOW}tail -f /tmp/webapp.log${NC}                           ${GREEN}║${NC}"
 echo -e "${GREEN}║${NC}                                                                    ${GREEN}║${NC}"
 echo -e "${GREEN}╠════════════════════════════════════════════════════════════════════╣${NC}"
@@ -131,4 +131,4 @@ trap cleanup SIGINT SIGTERM
 # Keep script running and follow logs
 echo -e "${CYAN}[LOGS]${NC} Streaming logs (Ctrl+C to stop all services)..."
 echo ""
-tail -f /tmp/mcp-server.log /tmp/webapp.log 2>/dev/null
+tail -f /tmp/nist-mcp-server.log /tmp/webapp.log 2>/dev/null

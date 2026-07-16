@@ -5,7 +5,7 @@ Model Context Protocol server providing 38 tools for NIST Cybersecurity Framewor
 ## Setup
 
 ```bash
-cd mcp-server
+cd nist-mcp-server
 
 # Install dependencies
 npm install
@@ -39,10 +39,22 @@ npm run start:http  # Port 8080
 
 The AI Agent webapp (parent directory) connects to this MCP server via HTTP.
 
-Start both:
+Start everything:
 ```bash
 # From parent directory
-npm run start:all
+npm start
 ```
 
-This starts both the MCP server (8080) and webapp (3001).
+This starts the webapp (`:3001`), this MCP server (`:8080`), and the sibling
+[`users-mcp-server`](../users-mcp-server/README.md) (`:8081`) concurrently.
+
+## Auth model vs. `users-mcp-server`
+
+This server is authorized with a reusable **ID-JAG access token** (1hr TTL) - the
+webapp does the ID-JAG token dance once and reuses the resulting access token as a
+normal Bearer credential for every tool call.
+
+`users-mcp-server` uses a completely different model: the agent holds **no API key at
+all** and instead requests a fresh, short-lived secret from **Okta Privileged Access
+Manager (PAM)** on every single call. See [`users-mcp-server/README.md`](../users-mcp-server/README.md)
+for that flow.

@@ -38,7 +38,7 @@ export class SecurityLogger {
         this.logger = winston.createLogger({
             level: process.env.LOG_LEVEL || 'info',
             format: winston.format.combine(winston.format.timestamp(), winston.format.errors({ stack: true }), winston.format.json()),
-            defaultMeta: { service: 'mcp-server' },
+            defaultMeta: { service: 'nist-mcp-server' },
             transports: [
                 // Console transport for development
                 new winston.transports.Console({

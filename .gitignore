@@ -25,3 +25,11 @@ Thumbs.db
 # Temp files
 /tmp/
 *.tmp
+
+# Nested lockfiles (only the root lockfile is tracked)
+nist-mcp-server/package-lock.json
+users-mcp-server/package-lock.json
+
+# Generated DB / seed artifacts (regenerate via each server's setup script)
+*.db
+nist-mcp-server/comprehensive-question-bank.json

@@ -5,12 +5,14 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "concurrently --kill-others-on-fail -n MCP,WEB -c blue,green \"npm run start:mcp\" \"npm run start:web\"",
+    "start": "concurrently --kill-others-on-fail -n MCP,USERS,WEB -c blue,magenta,green \"npm run start:mcp\" \"npm run start:users-mcp\" \"npm run start:web\"",
     "start:web": "node server.js",
     "dev": "node --watch server.js",
-    "start:mcp": "cd mcp-server && npm run start:http",
-    "setup:mcp": "cd mcp-server && npm install && npm run build && npm run import:csf-framework && npm run seed:questions",
-    "setup:all": "npm install && npm run setup:mcp"
+    "start:mcp": "cd nist-mcp-server && npm run start:http",
+    "start:users-mcp": "cd users-mcp-server && npm run start:http",
+    "setup:mcp": "cd nist-mcp-server && npm install && npm run build && npm run import:csf-framework && npm run seed:questions",
+    "setup:users-mcp": "cd users-mcp-server && npm install && npm run build",
+    "setup:all": "npm install && npm run setup:mcp && npm run setup:users-mcp"
   },
   "dependencies": {
     "cors": "^2.8.5",

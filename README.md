@@ -8,9 +8,12 @@ An Okta-protected AI chatbot that uses **Okta AI Agent Identity** with **ID-JAG 
 
 **This repository includes:**
 - 🤖 AI Agent Webapp (main directory)
-- 🔧 NIST CSF 2.0 MCP Server (`mcp-server/` directory)
+- 🔧 NIST CSF 2.0 MCP Server (`nist-mcp-server/` directory)
+- 🔐 Okta Users MCP Server (`users-mcp-server/` directory) - a second use case demonstrating **PAM-vaulted API keys** (see below)
 
 > 📋 **Note on MCP Server:** This repository includes an open-source implementation of the NIST Cybersecurity Framework 2.0 MCP (Model Context Protocol) server. The MCP server code is based on the open-source project available at [github.com/rocklambros/nist-csf-2-mcp-server](https://github.com/rocklambros/nist-csf-2-mcp-server) (MIT License). It is included here for convenience and demonstration purposes. The NIST Cybersecurity Framework is a public framework published by NIST, and this implementation provides programmatic access to the framework data for educational and development purposes.
+
+> 🔑 **No standing API key.** The `users-mcp-server` use case demonstrates a second, distinct pattern: the AI Agent never holds or caches the Okta API key it needs to call the Okta Users API. Every single time it needs to talk to that resource, it has to ask Okta for one. That key lives securely vaulted in **Okta Privileged Access Manager (PAM)**, and **Okta for AI Agents** wires a PAM connection into the Agent's Okta identity so the agent is authorized to request it. The agent proves who it is with a JWS (a signed JWT), and in exchange Okta hands back a short-lived, single-use vaulted secret - never a long-lived key sitting in `.env`. See [How It Works (Agent Retrieves Secret from PAM)](#how-it-works-agent-retrieves-secret-from-pam) for the full token flow.
 
 ---
 
@@ -28,19 +31,23 @@ npm run setup:all
 cp .env.example .env
 # Edit .env with your Okta and LiteLLM credentials
 
-# 4. Start both services
-npm run start:both
+# 4. Start all three services (webapp + both MCP servers, via concurrently)
+npm start
 ```
 
 **Access:**
 - 🌐 Webapp: http://localhost:3001
-- 🔧 MCP Server: http://localhost:8080
+- 🔧 NIST CSF 2.0 MCP Server: http://localhost:8080
+- 🔐 Okta Users MCP Server: http://localhost:8081
 
 ---
 
 ## What is This?
 
-This application demonstrates **Okta AI Agent architecture** where an AI agent can securely act on behalf of authenticated users.
+This application demonstrates **Okta AI Agent architecture** where an AI agent can securely act on behalf of authenticated users, across two distinct use cases:
+
+1. **NIST CSF 2.0 lookups** (`nist-mcp-server`) - the agent exchanges the user's ID token for an **ID-JAG token**, then an **access token**, and uses that access token as a normal Bearer credential against the MCP server. The access token is valid for its full lifetime (1 hour) and can be reused across calls.
+2. **Okta user search** (`users-mcp-server`) - the agent holds **no API key at all**. On every call it exchanges the user's raw ID token for a **vaulted secret** pulled live from Okta PAM, uses it exactly once, and discards it. There is nothing long-lived to steal, leak, or rotate.
 
 ### Key Concepts
 
@@ -61,9 +68,11 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 - ✅ **AI Agent Identity** - Agent has its own Okta identity
 - ✅ **ID-JAG Tokens** - Dual-identity tokens per IETF spec
 - ✅ **Claude AI Integration** - Powered by Anthropic Claude via LiteLLM
-- ✅ **MCP Tool Access** - 38 tools to query NIST CSF database
+- ✅ **MCP Tool Access** - 38 NIST CSF tools + Okta user search across two independent MCP servers
+- ✅ **PAM-Vaulted API Keys** - The agent holds no standing Okta API key; it requests a fresh, short-lived one from Okta Privileged Access Manager on every call (see [`users-mcp-server`](./users-mcp-server/README.md))
 - ✅ **Token Viewer** - Inspect all tokens and their claims
 - ✅ **Security** - End-to-end token validation with JWKS
+- ✅ **MCP Server Status & Tools** - Live dashboard showing both MCP servers, their health, and their available tools
 
 > 💡 **AI Backend:** This project uses [LiteLLM](https://litellm.ai/) as a proxy to Anthropic's Claude API. You can use Anthropic's API directly by changing the environment variables:
 > - `ANTHROPIC_BASE_URL` → `https://api.anthropic.com`
@@ -216,12 +225,107 @@ client_assertion={Fresh signed JWT for Custom Server}
 
 ---
 
+## How It Works (Agent Retrieves Secret from PAM)
+
+The `search_users` tool (served by `users-mcp-server`) needs a real Okta API token (`SSWS`) to call the Okta Users API. **The agent does not have that API key.** It isn't stored in `.env`, it isn't cached in memory, and it isn't handed to the agent once and reused - the agent has to ask Okta for it fresh, every single time it needs to talk to the Okta Users API.
+
+That key lives securely vaulted in **Okta Privileged Access Manager (PAM)**, in a managed connection the agent never sees directly. What the agent *does* have is an **Okta for AI Agents** identity that has been granted an integration into that PAM connection - an admin wires up "this Agent identity is allowed to request this specific vaulted secret" once, in Okta, ahead of time. From then on, every time the agent needs the key, it proves who it is with a **JWS** (a JSON Web Signature - a JWT signed with its private key) and presents the calling user's ID token alongside it. Okta validates both, checks the PAM authorization, and returns the secret - short-lived, single-use, and never persisted anywhere by the agent.
+
+This is a **different token-exchange grant** than the MCP Token Dance above, and it happens on every single call, never once and cached.
+
+### Simple Flow
+
+```
+1. User already logged in → Agent reuses the User's raw ID Token (same one from Token Dance Step 1)
+2. Agent signs a fresh client_assertion (private_key_jwt) → proves agent identity
+3. Agent exchanges the User's ID Token → Gets a Vaulted Secret (ORG server, resource = PAM connection ORN)
+4. Agent uses the Vaulted Secret as the Okta API token (SSWS header) → Calls Okta Users API
+5. Okta Users API returns matching users → Agent returns results to Claude
+6. Claude synthesizes an answer from the results → User sees response
+```
+
+### Complete Flow (3 Steps)
+
+#### Step 1: Reuse the User's Raw ID Token 👤
+
+- No new login - the raw ID Token from **Token Dance Step 1** is reused directly as the `subject_token` here.
+- **Key difference from the Token Dance:** `users-mcp-server` needs the user's raw ID Token itself, not an ID-JAG or Access Token - PAM validates the user's own ID Token directly, it doesn't accept a delegated/downstream token.
+- The webapp passes it straight through: `Authorization: Bearer {User's raw ID Token}` when calling `users-mcp-server`.
+
+---
+
+#### Step 2: Token Exchange for a Vaulted Secret 🔐
+
+- **Client:** AI Agent (`YOUR_AGENT_ID` - same identity as the Token Dance)
+- **Server:** Okta ORG Authorization Server (same endpoint as the ID-JAG exchange, different grant params)
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
+- **Grant:** Token Exchange
+- **Requested token type:** `urn:okta:params:oauth:token-type:vaulted-secret` (⚠️ Okta-namespaced URN, **not** the IETF standard token-type URN - specific to O4AA's vaulted-secret/service-account flows)
+- **Resource:** ORN of the PAM-managed connection holding the secret (not an audience/scope like the ID-JAG exchange)
+- **Auth:** Agent signs a fresh JWT with its private key (RS256), `aud` = the ORG token endpoint
+
+**Request to Okta:**
+```javascript
+POST /oauth2/v1/token
+
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+subject_token={User's raw ID Token}
+subject_token_type=urn:ietf:params:oauth:token-type:id_token
+requested_token_type=urn:okta:params:oauth:token-type:vaulted-secret
+resource={ORN of the PAM managed connection}
+client_id=YOUR_AGENT_ID
+client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
+client_assertion={JWT signed with agent's private key}
+```
+
+**Okta returns the Vaulted Secret:**
+```json
+{
+  "token_type": "N_A",
+  "expires_in": 300,
+  "issued_token_type": "urn:okta:params:oauth:token-type:vaulted-secret",
+  "vaulted_secret": {
+    "apikey": "{the actual Okta API token}",
+    "username": null,
+    "password": null,
+    "host": null
+  }
+}
+```
+
+💡 **Field name depends on connection type:** the O4AA spec describes `vaulted_secret.private`, but an API-key-type PAM connection (this project's setup) actually returns it under `vaulted_secret.apikey` instead. `okta-token-exchange.ts` checks `private` → `apikey` → `password` in that order, so it works regardless of which secret type the PAM connection holds.
+
+⚠️ **5-minute TTL:** `expires_in: 300`. This is exactly why the secret is fetched fresh on every `search_users` call and never cached - it's designed to be short-lived.
+
+---
+
+#### Step 3: Call the Downstream API with the Vaulted Secret 🔧
+
+- **Agent → Okta Users API**
+- **Authorization:** `SSWS {vaulted secret}` (Okta's own API key scheme, not `Bearer`)
+- One secret, one call, then it's discarded - the *next* `search_users` call repeats Steps 1-3 from scratch, with a brand-new client_assertion and a brand-new vaulted secret.
+
+---
+
+### Critical Rules
+
+| Rule | Why |
+|------|-----|
+| **subject_token = raw ID Token, not ID-JAG/Access Token** | PAM validates the user's own ID Token directly - it's a different trust path than the MCP Token Dance |
+| **requested_token_type is Okta-namespaced (`urn:okta:...`)** | Not the IETF standard URN - specific to O4AA's vaulted-secret/service-account flows |
+| **resource = ORN, not audience/scope** | The vaulted-secret exchange targets a specific PAM connection resource, unlike the ID-JAG exchange which targets an audience + scope |
+| **Never cache the vaulted secret** | It's short-lived by design (5 min TTL) - fetch fresh on every call |
+| **Never log the secret value** | Only the endpoint, resource ORN, and success/failure are logged - the actual key is redacted everywhere in logs and diagnostics |
+
+---
+
 ## Installation & Setup
 
 ### Prerequisites
 
 - Node.js 20.x or higher
 - Okta organization with AI Agent support
+- For the `users-mcp-server` use case: a PAM-managed connection holding an Okta API key, with the Agent identity granted an **Okta for AI Agents → PAM** integration authorizing it to request that specific vaulted secret
 - LiteLLM API access
 - Git
 
@@ -243,7 +347,10 @@ Edit `.env` with your credentials:
 | `CUSTOM_AUTH_SERVER` | Custom auth server | `https://your-org.okta.com/oauth2/aus...` |
 | `AGENT_PRIVATE_KEY_PATH` | Path to agent JWK | `./agent-keys/agent-private-key.json` |
 | `LITELLM_KEY` | LiteLLM API key | (your key) |
-| `MCP_SERVER_URL` | MCP endpoint | `http://localhost:8080` |
+| `MCP_SERVER_URL` | NIST CSF 2.0 MCP endpoint | `http://localhost:8080` |
+| `USERS_MCP_SERVER_URL` | Okta Users MCP endpoint | `http://localhost:8081` |
+
+`users-mcp-server` also needs its own `.env` (copy `users-mcp-server/.env.example`) with `VAULTED_SECRET_RESOURCE_ORN` set to the PAM connection's ORN - see [`users-mcp-server/README.md`](./users-mcp-server/README.md#configuration-env) for the full list.
 
 ### Step 2: Install Dependencies
 
@@ -251,21 +358,21 @@ Edit `.env` with your credentials:
 npm run setup:all
 ```
 
-This installs dependencies for both webapp and MCP server.
+This installs and builds dependencies for the webapp and **both** MCP servers, and seeds the NIST database.
 
 ### Step 3: Start Services
 
 ```bash
-npm run start:both
+npm start
 ```
 
-Or start separately:
-```bash
-# Terminal 1
-npm run start:mcp
+This runs the webapp, the NIST MCP server, and the Okta Users MCP server concurrently (prefixed `[WEB]`, `[MCP]`, `[USERS]` in the terminal).
 
-# Terminal 2
-npm start
+Or start any one of them separately:
+```bash
+npm run start:web         # webapp only, :3001
+npm run start:mcp         # NIST CSF 2.0 MCP server only, :8080
+npm run start:users-mcp   # Okta Users MCP server only, :8081
 ```
 
 ---
@@ -274,9 +381,9 @@ npm start
 
 1. **Open** http://localhost:3001
 2. **Login** with your Okta credentials
-3. **Ask questions** about NIST CSF 2.0
+3. **Ask questions** about NIST CSF 2.0, or ask it to look up an Okta user
 4. **Click your name** to view tokens
-5. **Click "Connected (38 tools)"** to see MCP tools
+5. **Click the connection status badge** to see both MCP servers and their tools
 
 ### Example Questions
 
@@ -284,6 +391,7 @@ npm start
 - "Look up the GOVERN function"
 - "Search for incident response controls"
 - "What are the DETECT categories?"
+- "Find the Okta user with email jane.doe@example.com"
 - "Show me access control subcategories"
 - "What questions assess risk management?"
 
@@ -295,18 +403,23 @@ npm start
 
 **Component Flow:**
 ```
-User → Webapp → Claude AI → MCP Server
-         ↓         ↓           ↓
-      Okta SSO  (decides)  NIST DB
-                (to use tools)
+                                    ┌─→ NIST CSF 2.0 MCP Server (:8080)
+                                    │   Auth: ID-JAG access token (1hr, reusable)
+User → Webapp → Claude AI ─(decides)┤
+         ↓         ↓        which   │
+      Okta SSO  (routes)   tool to  └─→ Okta Users MCP Server (:8081)
+                            call        Auth: raw user ID token, exchanged fresh
+                                        on every call for a vaulted secret
+                                             ↓
+                                        Okta PAM (vault) → Okta Users API
 ```
 
 **Authorization Servers:**
 
 | Server | URL | Used For |
 |--------|-----|----------|
-| **ORG** | `your-okta-domain.okta.com/oauth2/v1` | User login, ID-JAG exchange |
-| **Custom** | `your-okta-domain.okta.com/oauth2/aus...` | Audience, scope definition |
+| **ORG** | `your-okta-domain.okta.com/oauth2/v1` | User login, ID-JAG exchange, PAM vaulted-secret exchange |
+| **Custom** | `your-okta-domain.okta.com/oauth2/aus...` | Audience, scope definition (NIST MCP path only - the PAM path doesn't use it) |
 
 ### When to Use Which Client ID
 
@@ -420,14 +533,23 @@ The MCP server validates every request:
 | `/api/agent/tokens` | GET | Required | Agent tokens + ID-JAG |
 | `/api/chat` | POST | Required | Send chat message |
 | `/api/health` | GET | - | System health check |
+| `/api/mcp-servers` | GET | Required | Status + tool inventory for every registered MCP server (drives the "MCP Server Status & Tools" modal) |
 
-### MCP Server Endpoints
+### NIST CSF 2.0 MCP Server Endpoints (`nist-mcp-server`, port 8080)
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/health` | GET | - | MCP health check |
 | `/api/tools` | GET | - | List all 38 tools |
-| `/api/tools/:toolName` | POST | **ID-JAG Required** | Execute MCP tool |
+| `/api/tools/:toolName` | POST | **ID-JAG access token required** | Execute MCP tool - reusable Bearer token, valid for its full 1hr lifetime |
+
+### Okta Users MCP Server Endpoints (`users-mcp-server`, port 8081)
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | GET | - | MCP health check |
+| `/api/tools` | GET | - | List the `search-users` tool |
+| `/api/tools/search-users` | POST | **User's raw ID token required** | Search Okta users - the agent exchanges this token for a fresh PAM vaulted secret on every single call; **no API key is ever cached** |
 
 ---
 
@@ -439,16 +561,21 @@ okta-ai-agent-webapp/
 ├── public/
 │   └── index.html         # Frontend chat UI
 ├── agent-keys/
-│   └── agent-private-key.json  # Agent's private JWK (not in git)
-├── package.json           # Webapp dependencies
+│   └── agent-private-key.json  # Agent's private JWK (not in git) - shared by both MCP servers
+├── package.json           # Webapp dependencies + concurrently orchestration for all 3 services
 ├── .env                   # Configuration (not in git)
 ├── .env.example           # Configuration template
 ├── README.md              # This file
-└── mcp-server/            # NIST CSF 2.0 MCP Server
+├── nist-mcp-server/       # NIST CSF 2.0 MCP Server (ID-JAG access token auth)
+│   ├── src/               # TypeScript source
+│   ├── dist/              # Compiled JavaScript
+│   ├── data/              # NIST CSF framework data
+│   ├── scripts/           # Setup scripts
+│   └── package.json       # MCP dependencies
+└── users-mcp-server/      # Okta Users MCP Server (PAM vaulted-secret auth - no standing API key)
     ├── src/               # TypeScript source
     ├── dist/              # Compiled JavaScript
-    ├── data/              # NIST CSF framework data
-    ├── scripts/           # Setup scripts
+    ├── README.md          # Full vaulted-secret token-exchange details
     └── package.json       # MCP dependencies
 ```
 
@@ -463,10 +590,18 @@ okta-ai-agent-webapp/
 - dotenv - Environment configuration
 - express-session - Session management
 
-**MCP Server:**
+**NIST CSF 2.0 MCP Server:**
 - @modelcontextprotocol/sdk - MCP protocol
 - better-sqlite3 - Database
 - zod - Input validation
+- TypeScript - Type safety
+
+**Okta Users MCP Server:**
+- @modelcontextprotocol/sdk - MCP protocol
+- jsonwebtoken - Decode/inspect the raw user ID token
+- helmet + express-rate-limit - HTTP hardening
+- zod - Input validation
+- winston - Logging (secret values always redacted)
 - TypeScript - Type safety
 
 ---
@@ -489,13 +624,15 @@ Shows the 3-step process with real client IDs and server URLs.
 
 ---
 
-## MCP Tools Viewer
+## MCP Server Status & Tools
 
-Click **"Connected (38 tools)"** to see:
-- MCP server status
+Click the connection status badge to see a card for **every registered MCP server** (`nist-mcp-server` and `users-mcp-server`):
+- Online/offline status and health
 - Host and port
-- Complete list of 38 NIST CSF tools
-- Tool descriptions
+- Complete tool list per server, with descriptions
+- Any error, if a server is unreachable
+
+Adding a third MCP server later needs no frontend changes - just register it in `MCP_SERVERS` in `server.js` and it shows up here automatically.
 
 ---
 
@@ -517,6 +654,18 @@ Click **"Connected (38 tools)"** to see:
 ### "Invalid audience"
 - Audience must be custom auth server URL
 - Check `CUSTOM_AUTH_SERVER` in .env
+
+### `search_users` fails / "Users MCP Server" shows offline in the status modal
+- Start it: `npm run start:users-mcp` - check port 8081 is available
+- Check `USERS_MCP_SERVER_URL` in the webapp's `.env` matches where it's actually running
+
+### Vaulted-secret exchange failed (e.g. "invalid resource" or "unauthorized_client")
+- Confirm the Agent identity has an active **Okta for AI Agents → PAM** integration granting it access to the specific managed connection - this is configured once in Okta, ahead of time, and is what authorizes the agent to request the key at all
+- Check `VAULTED_SECRET_RESOURCE_ORN` in `users-mcp-server/.env` matches the PAM connection's actual ORN
+- Remember: the subject_token here must be the user's **raw ID token**, not an ID-JAG or access token - PAM validates it directly
+
+### "MCP Server Status & Tools" modal shows `Error: Server error: 401`
+- This means your webapp login session expired, not that a downstream MCP server is down - re-login and it will resolve
 
 ### Session expired
 - Sessions last 24 hours
@@ -552,6 +701,8 @@ node test-id-jag.js
 - ✅ Private keys never committed to git
 - ✅ ID-JAG tokens validated cryptographically
 - ✅ Full audit trail (user + agent in every request)
+- ✅ No standing Okta API key for `users-mcp-server` - a fresh, short-lived vaulted secret is requested from Okta PAM on every `search_users` call and is never cached or persisted
+- ✅ Vaulted secret values are never logged - only the endpoint, resource ORN, and success/failure are recorded
 
 ---
 
@@ -584,18 +735,24 @@ AGENT_PRIVATE_KEY_PATH=./agent-keys/agent-private-key.json
 # Server
 PORT=3001
 MCP_SERVER_URL=http://localhost:8080
+USERS_MCP_SERVER_URL=http://localhost:8081
 SESSION_SECRET=change-this-to-random-string
 ```
+
+> `users-mcp-server` has its own `.env` (see [`users-mcp-server/README.md`](./users-mcp-server/README.md#configuration-env)) with the PAM-specific variables - notably `VAULTED_SECRET_RESOURCE_ORN`, the ORN of the PAM-managed connection that holds the Okta API key. It reuses the same `AGENT_CLIENT_ID` and `AGENT_PRIVATE_KEY_PATH` as the webapp - one Agent identity, used for both the ID-JAG dance and the PAM vaulted-secret exchange.
 
 ### NPM Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run setup:all` | Install all dependencies (webapp + MCP) |
-| `npm run start:both` | Start both services |
-| `npm run start:mcp` | Start only MCP server |
-| `npm start` | Start only webapp |
-| `npm run dev` | Dev mode with auto-reload |
+| `npm run setup:all` | Install dependencies for the webapp + both MCP servers, build both, and seed the NIST database |
+| `npm start` | Start all three services concurrently: webapp (`:3001`), NIST MCP server (`:8080`), Users MCP server (`:8081`) |
+| `npm run start:web` | Start only the webapp |
+| `npm run start:mcp` | Start only the NIST CSF 2.0 MCP server |
+| `npm run start:users-mcp` | Start only the Okta Users MCP server |
+| `npm run dev` | Dev mode - webapp only, with auto-reload |
+| `npm run setup:mcp` | Install, build, and seed only the NIST MCP server |
+| `npm run setup:users-mcp` | Install and build only the Users MCP server |
 
 ---
 
