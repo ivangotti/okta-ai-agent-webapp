@@ -1,5 +1,5 @@
 /**
- * Logger configuration for the Okta Users MCP Server
+ * Logger configuration for the Users MCP Server
  */
 import winston from 'winston';
 import path from 'path';

@@ -1154,25 +1154,26 @@
         ${agentTokens?.vaultedSecretExchange ? `
         <div class="token-section" style="border: 2px solid #fb7185; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
           <h3>
-            <span style="color: #fb7185;">●</span> PAM Client Assertion (JWS)
-            <span class="badge" style="background: #881337; color: #fda4af;">ORG → vaulted-secret exchange</span>
-            ${agentTokens.vaultedSecretExchange.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.vaultedSecretExchange.clientAssertion.raw}')">Copy</button>` : ''}
+            <span style="color: #fb7185;">●</span> PAM Token Exchange
+            <span class="badge" style="background: #881337; color: #fda4af;">ORG token endpoint · key redacted</span>
           </h3>
-          <div style="font-size: 0.75rem; color: #fda4af; margin-bottom: 0.5rem;">
-            Proves the agent's identity for this request - resource: ${escapeHtml(agentTokens.vaultedSecretExchange.resource)}
+          <div style="font-size: 0.75rem; color: #fda4af; margin-bottom: 0.75rem;">
+            One HTTP call to Okta's token endpoint - the agent's signed request below, and Okta's response to it - exchanging the user's raw id_token for a vaulted secret scoped to resource: ${escapeHtml(agentTokens.vaultedSecretExchange.resource)}
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.4rem;">
+            <span>→ Request: client_assertion (JWS)</span>
+            ${agentTokens.vaultedSecretExchange.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.vaultedSecretExchange.clientAssertion.raw}')">Copy</button>` : ''}
           </div>
           <div class="token-raw">${agentTokens.vaultedSecretExchange.clientAssertion?.raw || 'Not available'}</div>
           <div class="token-parsed">${renderClaims(agentTokens.vaultedSecretExchange.clientAssertion?.parsed)}</div>
-        </div>
 
-        <div class="token-section" style="border: 2px solid #fb7185; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
-          <h3>
-            <span style="color: #fb7185;">●</span> Vaulted-Secret Exchange Response
-            <span class="badge" style="background: #881337; color: #fda4af;">ORG token endpoint · key redacted</span>
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin: 0.85rem 0 0.4rem;">
+            <span>← Response: Okta token-exchange body</span>
             ${agentTokens.vaultedSecretExchange.rawResponseRedacted ? `<button class="copy-btn" onclick="copyPreContent('pamRawResponsePre')">Copy</button>` : ''}
-          </h3>
-          <div style="font-size: 0.75rem; color: #fda4af; margin-bottom: 0.5rem;">
-            Okta's actual token-exchange response - the key itself is redacted here, but visible in this server's own debug logs (LOG_LEVEL=debug on users-mcp-server) for local debugging.
+          </div>
+          <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.4rem;">
+            The key itself is redacted here, but visible in this server's own debug logs (LOG_LEVEL=debug on users-mcp-server) for local debugging.
           </div>
           <pre id="pamRawResponsePre" style="background: var(--bg-token-raw); border: 1px solid var(--border-modal); border-radius: 6px; padding: 0.75rem; margin: 0 0 0.75rem 0; font-family: 'SF Mono', Monaco, monospace; font-size: 0.75rem; color: var(--color-token-raw); white-space: pre-wrap; word-break: break-word;">${agentTokens.vaultedSecretExchange.rawResponseRedacted ? escapeHtml(JSON.stringify(agentTokens.vaultedSecretExchange.rawResponseRedacted, null, 2)) : 'Not available'}</pre>
           <div style="font-size: 0.68rem; color: #94a3b8;">
@@ -1206,7 +1207,7 @@
 
       return `
         <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #fb7185;">
-          <h3 style="color: #e2e8f0; margin: 0 0 0.25rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Okta Users MCP Server — PAM Vaulted-Secret Exchange</h3>
+          <h3 style="color: #e2e8f0; margin: 0 0 0.25rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Users MCP Server — PAM Vaulted-Secret Exchange</h3>
           <div style="color: #64748b; font-size: 0.68rem; margin-bottom: 0.75rem;">${subtitle}</div>
           <div style="overflow-x: auto; padding-bottom: 0.5rem;">
             <div style="display: flex; align-items: stretch; gap: 0; min-width: 1180px; font-family: 'SF Mono', Menlo, Consolas, monospace;">

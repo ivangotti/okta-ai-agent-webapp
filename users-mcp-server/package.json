@@ -1,5 +1,5 @@
 {
-  "name": "okta-users-mcp-server",
+  "name": "users-mcp-server",
   "version": "1.0.0",
   "description": "MCP server exposing Okta Users API search, authenticated via O4AA vaulted-secret token exchange",
   "main": "dist/index.js",

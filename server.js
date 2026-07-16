@@ -77,7 +77,7 @@ const USERS_MCP_SERVER_URL = process.env.USERS_MCP_SERVER_URL || 'http://localho
 // backing endpoint (/api/mcp-servers) are both driven by this list.
 const MCP_SERVERS = [
   { key: 'nist', name: 'NIST CSF 2.0 MCP Server', url: MCP_SERVER_URL },
-  { key: 'users', name: 'Okta Users MCP Server', url: USERS_MCP_SERVER_URL }
+  { key: 'users', name: 'Users MCP Server', url: USERS_MCP_SERVER_URL }
 ];
 
 // ─── Okta Credential Manager (OCM) ───────────────────────────────────────────
@@ -1279,51 +1279,56 @@ app.get('/api/tools', ensureAuthenticated, async (req, res) => {
   }
 });
 
+// Checks one registered MCP server's /health + /api/tools. Shared by the
+// "MCP Server Status & Tools" modal endpoint below and the startup verbose
+// printer, so both always agree on what's actually online.
+async function checkMcpServer(server) {
+  try {
+    const [healthRes, toolsRes] = await Promise.all([
+      fetch(`${server.url}/health`),
+      fetch(`${server.url}/api/tools`)
+    ]);
+
+    if (!healthRes.ok) {
+      throw new Error(`Health check failed: ${healthRes.status}`);
+    }
+
+    const health = await healthRes.json();
+    const toolsData = toolsRes.ok ? await toolsRes.json() : { tools: [] };
+
+    return {
+      key: server.key,
+      name: server.name,
+      url: server.url,
+      online: true,
+      status: health.status || 'unknown',
+      version: health.version || null,
+      mode: health.mode || null,
+      toolsCount: toolsData.tools?.length ?? health.tools_available ?? 0,
+      tools: toolsData.tools || [],
+      error: null
+    };
+  } catch (error) {
+    return {
+      key: server.key,
+      name: server.name,
+      url: server.url,
+      online: false,
+      status: 'offline',
+      version: null,
+      mode: null,
+      toolsCount: 0,
+      tools: [],
+      error: error.message
+    };
+  }
+}
+
 // Status + tool inventory for every registered MCP server. Drives the
 // "MCP Server Status & Tools" modal - add a server to MCP_SERVERS and it
 // shows up here automatically.
 app.get('/api/mcp-servers', ensureAuthenticated, async (req, res) => {
-  const servers = await Promise.all(MCP_SERVERS.map(async (server) => {
-    try {
-      const [healthRes, toolsRes] = await Promise.all([
-        fetch(`${server.url}/health`),
-        fetch(`${server.url}/api/tools`)
-      ]);
-
-      if (!healthRes.ok) {
-        throw new Error(`Health check failed: ${healthRes.status}`);
-      }
-
-      const health = await healthRes.json();
-      const toolsData = toolsRes.ok ? await toolsRes.json() : { tools: [] };
-
-      return {
-        key: server.key,
-        name: server.name,
-        url: server.url,
-        online: true,
-        status: health.status || 'unknown',
-        version: health.version || null,
-        mode: health.mode || null,
-        toolsCount: toolsData.tools?.length ?? health.tools_available ?? 0,
-        tools: toolsData.tools || [],
-        error: null
-      };
-    } catch (error) {
-      return {
-        key: server.key,
-        name: server.name,
-        url: server.url,
-        online: false,
-        status: 'offline',
-        version: null,
-        mode: null,
-        toolsCount: 0,
-        tools: [],
-        error: error.message
-      };
-    }
-  }));
+  const servers = await Promise.all(MCP_SERVERS.map(checkMcpServer));
 
   res.json({ servers });
 });
@@ -1358,8 +1363,39 @@ app.listen(PORT, () => {
 ╠═══════════════════════════════════════════════════════════════════╣
 ║  LiteLLM:       ${(LITELLM_BASE_URL || '(resolving via ocm)').padEnd(46)}║
 ║  LLM Auth:      ${'ocm auth litellm'.padEnd(46)}║
-║  MCP Server:    ${MCP_SERVER_URL.padEnd(46)}║
+║  NIST MCP:      ${MCP_SERVER_URL.padEnd(46)}║
+║  Users MCP:     ${USERS_MCP_SERVER_URL.padEnd(46)}║
 ║  Okta Issuer:   ${OKTA_ISSUER.substring(0, 46)}║
 ╚═══════════════════════════════════════════════════════════════════╝
   `);
+  printMcpServerStatusOnBoot();
 });
+
+// The webapp, nist-mcp-server, and users-mcp-server all start concurrently
+// (see the root "start" npm script), so the sub-servers aren't necessarily
+// up yet the instant this callback fires. Poll each with checkMcpServer()
+// until it responds (or we give up) and print one status + tool-count line
+// per server, in MCP_SERVERS order, so both are visible in the startup
+// output - not just whichever sub-process's own banner happened to log
+// first.
+async function printMcpServerStatusOnBoot() {
+  const maxAttempts = 20;
+  const retryDelayMs = 500;
+
+  const results = await Promise.all(MCP_SERVERS.map(async (server) => {
+    let result = await checkMcpServer(server);
+    for (let attempt = 1; attempt < maxAttempts && !result.online; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      result = await checkMcpServer(server);
+    }
+    return result;
+  }));
+
+  console.log('🔧 MCP Servers:');
+  for (const result of results) {
+    const status = result.online
+      ? `✅ online · ${result.toolsCount} tool${result.toolsCount === 1 ? '' : 's'}`
+      : `❌ offline (${result.error})`;
+    console.log(`   ${result.name.padEnd(24)} ${result.url.padEnd(28)} ${status}`);
+  }
+}

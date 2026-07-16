@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * HTTP REST API server for the Okta Users MCP Server.
+ * HTTP REST API server for the Users MCP Server.
  *
  * Unlike nist-mcp-server (which expects an ID-JAG-derived access token
  * scoped to that MCP server's audience), this server expects the caller's
@@ -109,7 +109,7 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
   app.get('/api/tools', (_req, res) => {
     res.json({
       success: true,
-      message: 'Okta Users MCP Server - HTTP REST API',
+      message: 'Users MCP Server - HTTP REST API',
       tools: [
         {
           name: 'search-users',
@@ -161,7 +161,7 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
   });
 
   const server = app.listen(port, '0.0.0.0', () => {
-    logger.info(`🌐 Okta Users MCP Server (HTTP) running on port ${port}`);
+    logger.info(`🌐 Users MCP Server (HTTP) running on port ${port}`);
     logger.info(`📖 API Documentation: http://localhost:${port}/api/tools`);
     logger.info(`💚 Health Check: http://localhost:${port}/health`);
     logger.info(`🔧 Available Tools: 1`);

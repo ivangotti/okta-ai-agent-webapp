@@ -9,7 +9,7 @@ An Okta-protected AI chatbot that uses **Okta AI Agent Identity** with **ID-JAG 
 **This repository includes:**
 - 🤖 AI Agent Webapp (main directory)
 - 🔧 NIST CSF 2.0 MCP Server (`nist-mcp-server/` directory)
-- 🔐 Okta Users MCP Server (`users-mcp-server/` directory) - a second use case demonstrating **PAM-vaulted API keys** (see below)
+- 🔐 Users MCP Server (`users-mcp-server/` directory) - a second use case demonstrating **PAM-vaulted API keys** (see below)
 
 > 📋 **Note on MCP Server:** This repository includes an open-source implementation of the NIST Cybersecurity Framework 2.0 MCP (Model Context Protocol) server. The MCP server code is based on the open-source project available at [github.com/rocklambros/nist-csf-2-mcp-server](https://github.com/rocklambros/nist-csf-2-mcp-server) (MIT License). It is included here for convenience and demonstration purposes. The NIST Cybersecurity Framework is a public framework published by NIST, and this implementation provides programmatic access to the framework data for educational and development purposes.
 
@@ -39,7 +39,7 @@ npm start
 **Access:**
 - 🌐 Webapp: http://localhost:3001
 - 🔧 NIST CSF 2.0 MCP Server: http://localhost:8080
-- 🔐 Okta Users MCP Server: http://localhost:8081
+- 🔐 Users MCP Server: http://localhost:8081
 
 > ⚠️ **Two separate `.env` files - don't look for everything in one place.** Each service owns its own config:
 >
@@ -358,7 +358,7 @@ Edit `.env` with your credentials:
 | `AGENT_PRIVATE_KEY_PATH` | Path to agent JWK | `./agent-keys/agent-private-key.json` |
 | `LITELLM_KEY` | LiteLLM API key | (your key) |
 | `MCP_SERVER_URL` | NIST CSF 2.0 MCP endpoint | `http://localhost:8080` |
-| `USERS_MCP_SERVER_URL` | Okta Users MCP endpoint | `http://localhost:8081` |
+| `USERS_MCP_SERVER_URL` | Users MCP endpoint | `http://localhost:8081` |
 
 `users-mcp-server` also needs its own `.env` (copy `users-mcp-server/.env.example`) with `VAULTED_SECRET_RESOURCE_ORN` set to the PAM connection's ORN - see [`users-mcp-server/README.md`](./users-mcp-server/README.md#configuration-env) for the full list.
 
@@ -376,13 +376,13 @@ This installs and builds dependencies for the webapp and **both** MCP servers, a
 npm start
 ```
 
-This runs the webapp, the NIST MCP server, and the Okta Users MCP server concurrently (prefixed `[WEB]`, `[MCP]`, `[USERS]` in the terminal).
+This runs the webapp, the NIST MCP server, and the Users MCP server concurrently (prefixed `[WEB]`, `[MCP]`, `[USERS]` in the terminal).
 
 Or start any one of them separately:
 ```bash
 npm run start:web         # webapp only, :3001
 npm run start:mcp         # NIST CSF 2.0 MCP server only, :8080
-npm run start:users-mcp   # Okta Users MCP server only, :8081
+npm run start:users-mcp   # Users MCP server only, :8081
 ```
 
 ---
@@ -417,7 +417,7 @@ npm run start:users-mcp   # Okta Users MCP server only, :8081
                                     │   Auth: ID-JAG access token (1hr, reusable)
 User → Webapp → Claude AI ─(decides)┤
          ↓         ↓        which   │
-      Okta SSO  (routes)   tool to  └─→ Okta Users MCP Server (:8081)
+      Okta SSO  (routes)   tool to  └─→ Users MCP Server (:8081)
                             call        Auth: raw user ID token, exchanged fresh
                                         on every call for a vaulted secret
                                              ↓
@@ -553,7 +553,7 @@ The MCP server validates every request:
 | `/api/tools` | GET | - | List all 38 tools |
 | `/api/tools/:toolName` | POST | **ID-JAG access token required** | Execute MCP tool - reusable Bearer token, valid for its full 1hr lifetime |
 
-### Okta Users MCP Server Endpoints (`users-mcp-server`, port 8081)
+### Users MCP Server Endpoints (`users-mcp-server`, port 8081)
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
@@ -582,7 +582,7 @@ okta-ai-agent-webapp/
 │   ├── data/              # NIST CSF framework data
 │   ├── scripts/           # Setup scripts
 │   └── package.json       # MCP dependencies
-└── users-mcp-server/      # Okta Users MCP Server (PAM vaulted-secret auth - no standing API key)
+└── users-mcp-server/      # Users MCP Server (PAM vaulted-secret auth - no standing API key)
     ├── src/               # TypeScript source
     ├── dist/              # Compiled JavaScript
     ├── README.md          # Full vaulted-secret token-exchange details
@@ -606,7 +606,7 @@ okta-ai-agent-webapp/
 - zod - Input validation
 - TypeScript - Type safety
 
-**Okta Users MCP Server:**
+**Users MCP Server:**
 - @modelcontextprotocol/sdk - MCP protocol
 - jsonwebtoken - Decode/inspect the raw user ID token
 - helmet + express-rate-limit - HTTP hardening
@@ -759,7 +759,7 @@ SESSION_SECRET=change-this-to-random-string
 | `npm start` | Start all three services concurrently: webapp (`:3001`), NIST MCP server (`:8080`), Users MCP server (`:8081`) |
 | `npm run start:web` | Start only the webapp |
 | `npm run start:mcp` | Start only the NIST CSF 2.0 MCP server |
-| `npm run start:users-mcp` | Start only the Okta Users MCP server |
+| `npm run start:users-mcp` | Start only the Users MCP server |
 | `npm run dev` | Dev mode - webapp only, with auto-reload |
 | `npm run setup:mcp` | Install, build, and seed only the NIST MCP server |
 | `npm run setup:users-mcp` | Install and build only the Users MCP server |

@@ -1,4 +1,4 @@
-# Okta Users MCP Server
+# Users MCP Server
 
 Model Context Protocol server exposing one tool, `search-users`, which searches Okta's
 [List Users](https://developer.okta.com/docs/api/openapi/okta-management/management/tags/user/other/listusers)

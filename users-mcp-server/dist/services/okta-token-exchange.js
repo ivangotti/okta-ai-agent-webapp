@@ -120,6 +120,21 @@ export async function getVaultedSecret(userIdToken) {
         client_assertion: clientAssertion,
     });
     logger.info('Requesting vaulted secret', { endpoint: orgTokenEndpoint, resource: resourceOrn });
+    // Verbose/debug-only: the exact wire request, unencoded and readable -
+    // includes the real subject_token and client_assertion. Only visible
+    // with LOG_LEVEL=debug on this server's own console, never sent to the
+    // browser.
+    logger.debug(`PAM vaulted-secret token exchange request (verbose)\n\n` +
+        `POST ${orgTokenEndpoint}\n` +
+        `Content-Type: application/x-www-form-urlencoded\n\n` +
+        `grant_type=urn:ietf:params:oauth:grant-type:token-exchange\n` +
+        `&subject_token=${userIdToken}\n` +
+        `&subject_token_type=urn:ietf:params:oauth:token-type:id_token\n` +
+        `&requested_token_type=urn:okta:params:oauth:token-type:vaulted-secret\n` +
+        `&resource=${resourceOrn}\n` +
+        `&client_id=${agentClientId}\n` +
+        `&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer\n` +
+        `&client_assertion=${clientAssertion}`);
     const response = await fetch(orgTokenEndpoint, {
         method: 'POST',
         headers: {
@@ -138,10 +153,12 @@ export async function getVaultedSecret(userIdToken) {
         throw new Error('Vaulted secret exchange succeeded but response contained no usable secret value (checked private/apikey/password)');
     }
     logger.info('Vaulted secret retrieved successfully', { issued_token_type: data.issued_token_type });
-    // Verbose/debug-only: the real key, for local debugging. Never logged at
-    // info level - only visible with LOG_LEVEL=debug on this server's own
-    // console.
-    logger.debug('Vaulted secret raw response (contains real key)', { response: data });
+    // Verbose/debug-only: Okta validated the client_assertion against the
+    // agent's registered public key, checked the resource connection, and
+    // returned this - the real key, unredacted, for local debugging. Never
+    // logged at info level, never sent to the browser except via the
+    // explicit "DEBUG" reveal button.
+    logger.debug(`PAM vaulted-secret token exchange response (verbose)\n\n${JSON.stringify(data, null, 2)}`);
     const fetchedAt = new Date().toISOString();
     lastRevealableSecret = { secret, fetchedAt };
     return {

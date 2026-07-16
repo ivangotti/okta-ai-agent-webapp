@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Okta Users MCP Server - stdio entrypoint (for generic MCP clients such as
+ * Users MCP Server - stdio entrypoint (for generic MCP clients such as
  * Claude Desktop).
  *
  * NOTE: The primary integration path today is the HTTP REST wrapper
@@ -19,7 +19,7 @@ const StdioSearchUsersSchema = SearchUsersSchema.and(z.object({
     user_id_token: z.string().describe("The caller's raw Okta ID token, used as the subject_token for the vaulted-secret exchange"),
 }));
 async function main() {
-    logger.info('Starting Okta Users MCP Server...');
+    logger.info('Starting Users MCP Server...');
     const server = new Server({ name: 'okta-users-mcp-server', version: '1.0.0' }, { capabilities: { tools: {}, prompts: {}, resources: {} } });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
         tools: [
@@ -69,7 +69,7 @@ async function main() {
     });
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    logger.info('Okta Users MCP Server running on stdio transport');
+    logger.info('Users MCP Server running on stdio transport');
     await new Promise(() => { });
 }
 main().catch((error) => {
