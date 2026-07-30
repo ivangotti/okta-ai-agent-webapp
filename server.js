@@ -275,10 +275,27 @@ const idJagTokenCache = new Map();
 // actually requested a key, instead of just the static ID-JAG diagram.
 const vaultedSecretExchangeCache = new Map();
 
+// Most recent PAM service-account exchange per user (users-mcp-server,
+// get_salesforce_service_account). Same idea as vaultedSecretExchangeCache
+// above, but for the service-account O4AA resource type - Okta returns a
+// Salesforce username/password pair here instead of an arbitrary vaulted
+// secret. Metadata only - the password is never cached.
+const serviceAccountExchangeCache = new Map();
+
+// Most recent Agent-to-Agent (A2A) delegation chain per user (users-mcp-
+// server: Agent A -> ID-JAG for Agent B -> Agent B redeems it). Runs before
+// both PAM exchanges above whenever they run, so this is populated
+// alongside whichever of vaultedSecretExchangeCache/serviceAccountExchangeCache
+// gets set. Unlike those two, this carries the raw ID-JAG and chained
+// access token in the clear (see agent-a2a-chain.ts for why) - the Token
+// Architecture viewer shows the `act` chain-of-custody claim from here.
+const a2aChainCache = new Map();
+
 // Which flow the agent most recently actually used for this user -
-// 'nist-mcp' or 'users-mcp' - set at the same point each respective cache
-// above gets populated. The token viewer uses this to show only the
-// diagram for whichever flow just ran, instead of both at once.
+// 'nist-mcp', 'users-mcp', or 'salesforce-service-account' - set at the same
+// point each respective cache above gets populated. The token viewer uses
+// this to show only the diagram for whichever flow just ran, instead of all
+// of them at once.
 const lastAgentFlowCache = new Map();
 
 // Get agent access token using client credentials flow with private_key_jwt
@@ -874,6 +891,39 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
         scope: tokenData.scope,
         fromOkta: tokenData.fromOkta
       } : null,
+      // Populated only after the agent has actually run the A2A delegation
+      // chain at least once (Agent A -> ID-JAG for Agent B -> Agent B
+      // redeems it), which happens immediately before either PAM exchange
+      // below. Unlike those, the raw ID-JAG and chained access token are
+      // included in the clear - see agent-a2a-chain.ts for why that's safe.
+      a2aChain: (() => {
+        const cached = a2aChainCache.get(user.id);
+        if (!cached) return null;
+        return {
+          description: 'A2A delegation chain: Agent A -> ID-JAG for Agent B -> Agent B redeems it',
+          requestedAt: cached.requestedAt,
+          agentAClientId: cached.a2aChain.agentAClientId,
+          agentBClientId: cached.a2aChain.agentBClientId,
+          hop1: {
+            ...cached.a2aChain.hop1,
+            clientAssertion: {
+              raw: cached.a2aChain.hop1.clientAssertion,
+              parsed: parseJwt(cached.a2aChain.hop1.clientAssertion)
+            }
+          },
+          hop1Redeem: {
+            ...cached.a2aChain.hop1Redeem,
+            clientAssertion: {
+              raw: cached.a2aChain.hop1Redeem.clientAssertion,
+              parsed: parseJwt(cached.a2aChain.hop1Redeem.clientAssertion)
+            }
+          },
+          chainedAccessToken: {
+            raw: cached.a2aChain.chainedAccessToken,
+            parsed: cached.a2aChain.chainedAccessTokenClaims
+          }
+        };
+      })(),
       // Populated only after the agent has actually called search_users at
       // least once - the PAM vaulted-secret flow is request-triggered, not
       // pre-fetched like the ID-JAG dance above. The secret itself is never
@@ -906,6 +956,40 @@ app.get('/api/agent/tokens', ensureAuthenticated, async (req, res) => {
           // below - a separate, deliberate opt-in action.
           rawResponseRedacted: cached.pamExchange.rawResponseRedacted
         };
+      })(),
+      // Populated only after the agent has actually called
+      // get_salesforce_service_account at least once - mirrors
+      // vaultedSecretExchange above, but for the service-account exchange.
+      // The password is never included, only the exchange metadata plus the
+      // (non-secret) username and the downstream Salesforce login outcome.
+      serviceAccountExchange: (() => {
+        const cached = serviceAccountExchangeCache.get(user.id);
+        if (!cached) return null;
+        return {
+          description: 'PAM service-account exchange for users-mcp-server (get_salesforce_service_account)',
+          requestedAt: cached.requestedAt,
+          username: cached.username,
+          salesforceLogin: cached.salesforceLogin,
+          success: cached.success,
+          usersMcpServerUrl: cached.usersMcpServerUrl,
+          tokenEndpoint: cached.pamExchange.tokenEndpoint,
+          resource: cached.pamExchange.resource,
+          requestedTokenType: cached.pamExchange.requestedTokenType,
+          issuedTokenType: cached.pamExchange.issuedTokenType,
+          subjectTokenType: cached.pamExchange.subjectTokenType,
+          expiresIn: cached.pamExchange.expiresIn,
+          clientAssertion: {
+            raw: cached.pamExchange.clientAssertion,
+            parsed: parseJwt(cached.pamExchange.clientAssertion)
+          },
+          // Okta's actual token-exchange response, verbatim, with only
+          // service_account.password swapped for "REDACTED" - see
+          // redactServiceAccountResponse() in users-mcp-server. The real
+          // password is not included here; it's only ever sent to the
+          // browser via the "DEBUG" button, which hits
+          // /api/agent/debug-reveal-service-account below.
+          rawResponseRedacted: cached.pamExchange.rawResponseRedacted
+        };
       })()
     });
   } catch (error) {
@@ -922,6 +1006,23 @@ app.get('/api/agent/debug-reveal-secret', ensureAuthenticated, async (req, res) 
   try {
     const user = req.user;
     const response = await fetch(`${USERS_MCP_SERVER_URL}/api/debug/reveal-secret`, {
+      headers: { 'Authorization': `Bearer ${user.idToken}` }
+    });
+    const result = await response.json();
+    res.status(response.status).json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Local-debugging-only: proxies to users-mcp-server's own debug endpoint to
+// reveal the real value (username/password) of the most recent PAM
+// service-account exchange. Mirrors /api/agent/debug-reveal-secret above,
+// for the get_salesforce_service_account flow instead of search_users.
+app.get('/api/agent/debug-reveal-service-account', ensureAuthenticated, async (req, res) => {
+  try {
+    const user = req.user;
+    const response = await fetch(`${USERS_MCP_SERVER_URL}/api/debug/reveal-service-account`, {
       headers: { 'Authorization': `Bearer ${user.idToken}` }
     });
     const result = await response.json();
@@ -1018,9 +1119,22 @@ const USERS_MCP_TOOL_DEFINITION = {
   }
 };
 
+// get_salesforce_service_account is also served by users-mcp-server - a
+// different O4AA resource type (service-account) than search_users's
+// vaulted-secret exchange. See users-mcp-server/src/services/
+// okta-service-account-exchange.ts.
+const SALESFORCE_SERVICE_ACCOUNT_TOOL_DEFINITION = {
+  name: 'get_salesforce_service_account',
+  description: 'Retrieve the Salesforce service-account credential vaulted in Okta Privileged Access Management (PAM), via an O4AA service-account token exchange. Use when the user asks to access/log into Salesforce as the service account, or to fetch/retrieve/check out the Salesforce PAM-vaulted credential.',
+  input_schema: {
+    type: 'object',
+    properties: {}
+  }
+};
+
 // Get MCP tools in Anthropic format
 async function getMcpToolsForClaude() {
-  const toolDefinitions = [USERS_MCP_TOOL_DEFINITION];
+  const toolDefinitions = [USERS_MCP_TOOL_DEFINITION, SALESFORCE_SERVICE_ACCOUNT_TOOL_DEFINITION];
 
   try {
     const response = await fetch(`${MCP_SERVER_URL}/api/tools`);
@@ -1130,9 +1244,71 @@ async function executeUsersMcpTool(toolInput, userIdToken, userId) {
       });
     }
 
+    // Record the A2A delegation chain that ran before the PAM exchange
+    // above (Agent A -> ID-JAG for Agent B -> Agent B redeems it) so the
+    // Token Architecture viewer can show every hop, including the `act`
+    // chain-of-custody claim on the chained access token.
+    if (result.data?.a2aChain) {
+      a2aChainCache.set(userId, {
+        a2aChain: result.data.a2aChain,
+        requestedAt: result.data.a2aChain.fetchedAt || new Date().toISOString()
+      });
+    }
+
     return result;
   } catch (error) {
     console.error('Tool search_users error:', error);
+    return { error: error.message };
+  }
+}
+
+// Execute the get_salesforce_service_account tool against users-mcp-server.
+// Same auth pattern as executeUsersMcpTool - the raw user ID token is the
+// subject_token for users-mcp-server's own service-account exchange
+// (fetched fresh on every call, no caching).
+async function executeSalesforceServiceAccountTool(toolInput, userIdToken, userId) {
+  try {
+    console.log('Executing users-mcp-server tool: get_salesforce_service_account');
+
+    const response = await fetch(`${USERS_MCP_SERVER_URL}/api/tools/get-salesforce-service-account`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userIdToken}`  // Raw user ID token, not ID-JAG!
+      },
+      body: JSON.stringify(toolInput)
+    });
+
+    const result = await response.json();
+    console.log('Tool get_salesforce_service_account completed:', result.success ? 'SUCCESS' : 'FAILED');
+
+    // Record the PAM service-account exchange metadata (never the password)
+    // so the Token Architecture viewer can show the real flow the agent
+    // just ran - same convention as executeUsersMcpTool's
+    // vaultedSecretExchangeCache above.
+    if (result.data?.pamExchange) {
+      lastAgentFlowCache.set(userId, 'salesforce-service-account');
+      serviceAccountExchangeCache.set(userId, {
+        pamExchange: result.data.pamExchange,
+        requestedAt: result.data.pamExchange.fetchedAt || new Date().toISOString(),
+        username: result.data.username ?? null,
+        salesforceLogin: result.data.salesforceLogin ?? null,
+        success: Boolean(result.data.success),
+        usersMcpServerUrl: USERS_MCP_SERVER_URL
+      });
+    }
+
+    // Same A2A chain recording as executeUsersMcpTool above.
+    if (result.data?.a2aChain) {
+      a2aChainCache.set(userId, {
+        a2aChain: result.data.a2aChain,
+        requestedAt: result.data.a2aChain.fetchedAt || new Date().toISOString()
+      });
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Tool get_salesforce_service_account error:', error);
     return { error: error.message };
   }
 }
@@ -1157,6 +1333,7 @@ You have access to ${tools.length} MCP tools:
 - search_framework: Search the NIST CSF 2.0 framework for keywords and concepts
 - get_assessment_questions: Get NIST CSF 2.0 assessment questions for subcategories
 - search_users: Search Okta users by first name, last name, and/or email
+- get_salesforce_service_account: Retrieve the Salesforce service-account credential vaulted in Okta PAM (O4AA service-account token exchange)
 
 Use these tools to provide accurate, data-driven answers.`;
 
@@ -1210,6 +1387,8 @@ Use these tools to provide accurate, data-driven answers.`;
         let toolResult;
         if (toolUse.name === 'search_users') {
           toolResult = await executeUsersMcpTool(toolUse.input, user.idToken, user.id);
+        } else if (toolUse.name === 'get_salesforce_service_account') {
+          toolResult = await executeSalesforceServiceAccountTool(toolUse.input, user.idToken, user.id);
         } else {
           let mcpAccessToken = null;
           try {

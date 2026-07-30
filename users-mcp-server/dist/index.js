@@ -15,8 +15,12 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema
 import { z } from 'zod';
 import { logger } from './utils/logger.js';
 import { searchUsers, SearchUsersSchema } from './tools/search_users.js';
+import { getSalesforceServiceAccount, GetSalesforceServiceAccountSchema } from './tools/get_salesforce_service_account.js';
 const StdioSearchUsersSchema = SearchUsersSchema.and(z.object({
     user_id_token: z.string().describe("The caller's raw Okta ID token, used as the subject_token for the vaulted-secret exchange"),
+}));
+const StdioGetSalesforceServiceAccountSchema = GetSalesforceServiceAccountSchema.and(z.object({
+    user_id_token: z.string().describe("The caller's raw Okta ID token, used as the subject_token for the service-account exchange"),
 }));
 async function main() {
     logger.info('Starting Users MCP Server...');
@@ -38,6 +42,17 @@ async function main() {
                     required: ['user_id_token'],
                 },
             },
+            {
+                name: 'get-salesforce-service-account',
+                description: 'Retrieve the Salesforce service-account credential vaulted in Okta PAM (O4AA service-account token exchange)',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        user_id_token: { type: 'string', description: "Caller's raw Okta ID token (stdio mode only)" },
+                    },
+                    required: ['user_id_token'],
+                },
+            },
         ],
     }));
     server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: [] }));
@@ -49,6 +64,13 @@ async function main() {
                 case 'search-users': {
                     const { user_id_token, ...params } = StdioSearchUsersSchema.parse(args);
                     const result = await searchUsers(params, user_id_token);
+                    return {
+                        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                    };
+                }
+                case 'get-salesforce-service-account': {
+                    const { user_id_token, ...params } = StdioGetSalesforceServiceAccountSchema.parse(args);
+                    const result = await getSalesforceServiceAccount(params, user_id_token);
                     return {
                         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
                     };

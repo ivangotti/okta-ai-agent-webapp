@@ -17,66 +17,8 @@
  * `dotenv.config()` call has had a chance to populate process.env.
  */
 
-import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from '../utils/logger.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-interface AgentJwk {
-  kid: string;
-  [key: string]: unknown;
-}
-
-let agentPrivateKey: AgentJwk | undefined;
-
-function loadAgentPrivateKey(privateKeyPath: string): AgentJwk {
-  if (agentPrivateKey) return agentPrivateKey;
-
-  try {
-    // Resolve relative to this project's root (two levels up from dist/services
-    // or src/services), matching how the webapp resolves AGENT_PRIVATE_KEY_PATH
-    // relative to its own __dirname.
-    const keyPath = join(__dirname, '..', '..', privateKeyPath);
-    agentPrivateKey = JSON.parse(readFileSync(keyPath, 'utf-8'));
-    logger.info('Agent private key loaded successfully', { path: privateKeyPath });
-    return agentPrivateKey as AgentJwk;
-  } catch (err: any) {
-    throw new Error(`Failed to load agent private key from ${privateKeyPath}: ${err.message}`);
-  }
-}
-
-function jwkToPem(jwk: AgentJwk): string {
-  const keyObject = crypto.createPrivateKey({ key: jwk as any, format: 'jwk' });
-  return keyObject.export({ type: 'pkcs8', format: 'pem' }) as string;
-}
-
-function generateClientAssertion(clientId: string, tokenEndpoint: string, privateKeyPath: string): string {
-  const jwk = loadAgentPrivateKey(privateKeyPath);
-  const now = Math.floor(Date.now() / 1000);
-
-  const payload = {
-    iss: clientId,
-    sub: clientId,
-    aud: tokenEndpoint,
-    iat: now,
-    exp: now + 300, // 5 minutes
-    jti: crypto.randomUUID(),
-  };
-
-  const privateKeyPem = jwkToPem(jwk);
-
-  return jwt.sign(payload, privateKeyPem, {
-    algorithm: 'RS256',
-    header: {
-      alg: 'RS256',
-      kid: jwk.kid,
-    },
-  });
-}
+import { generateClientAssertion } from '../utils/agent-assertion.js';
 
 interface VaultedSecretResponse {
   token_type?: string;
@@ -140,6 +82,19 @@ export interface VaultedSecretResult {
   meta: VaultedSecretExchangeMeta;
 }
 
+/**
+ * Who signs the exchange and what's being exchanged. Both default to
+ * today's single-hop behavior (Agent A signer, subject_token is a raw ID
+ * token) so existing callers don't need to change. The A2A chain passes
+ * Agent B's identity and the chained access token (T3) instead - see
+ * search_users.ts / get_salesforce_service_account.ts.
+ */
+export interface PamExchangeOptions {
+  subjectTokenType?: string;
+  clientId?: string;
+  privateKeyPath?: string;
+}
+
 // In-memory only, overwritten by the next exchange and cleared on process
 // restart - never persisted. Exists solely so the webapp's red "DEBUG"
 // button can reveal the real value of the most recent exchange for local
@@ -152,13 +107,21 @@ export function getLastRevealableSecret(): { secret: string; fetchedAt: string }
 }
 
 /**
- * Exchange the user's raw ID token for the vaulted secret (Okta API token)
- * stored behind VAULTED_SECRET_RESOURCE_ORN. Fetched fresh on every call.
+ * Exchange a subject token for the vaulted secret (Okta API token) stored
+ * behind VAULTED_SECRET_RESOURCE_ORN. Fetched fresh on every call.
+ *
+ * By default, subjectToken is treated as the caller's raw ID token and the
+ * exchange is signed as Agent A (today's single-hop behavior). Pass
+ * options.subjectTokenType='urn:ietf:params:oauth:token-type:access_token'
+ * with options.clientId/privateKeyPath set to Agent B's identity to
+ * exchange the A2A chain's access token (T3) instead - see
+ * agent-a2a-chain.ts.
  */
-export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecretResult> {
+export async function getVaultedSecret(subjectToken: string, options: PamExchangeOptions = {}): Promise<VaultedSecretResult> {
   const oktaDomain = process.env.OKTA_DOMAIN || 'https://blackcastle.oktapreview.com';
-  const agentClientId = process.env.AGENT_CLIENT_ID;
-  const agentPrivateKeyPath = process.env.AGENT_PRIVATE_KEY_PATH || '../agent-keys/agent-private-key.json';
+  const agentClientId = options.clientId || process.env.AGENT_CLIENT_ID;
+  const agentPrivateKeyPath = options.privateKeyPath || process.env.AGENT_PRIVATE_KEY_PATH || '../agent-keys/agent-private-key.json';
+  const subjectTokenType = options.subjectTokenType || 'urn:ietf:params:oauth:token-type:id_token';
   const resourceOrn = process.env.VAULTED_SECRET_RESOURCE_ORN;
 
   if (!agentClientId) {
@@ -173,8 +136,8 @@ export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecr
 
   const params = new URLSearchParams({
     grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-    subject_token: userIdToken,
-    subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+    subject_token: subjectToken,
+    subject_token_type: subjectTokenType,
     requested_token_type: 'urn:okta:params:oauth:token-type:vaulted-secret',
     resource: resourceOrn,
     client_id: agentClientId,
@@ -182,7 +145,7 @@ export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecr
     client_assertion: clientAssertion,
   });
 
-  logger.info('Requesting vaulted secret', { endpoint: orgTokenEndpoint, resource: resourceOrn });
+  logger.info('Requesting vaulted secret', { endpoint: orgTokenEndpoint, resource: resourceOrn, clientId: agentClientId, subjectTokenType });
   // Verbose/debug-only: the exact wire request, unencoded and readable -
   // includes the real subject_token and client_assertion. Only visible
   // with LOG_LEVEL=debug on this server's own console, never sent to the
@@ -192,8 +155,8 @@ export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecr
       `POST ${orgTokenEndpoint}\n` +
       `Content-Type: application/x-www-form-urlencoded\n\n` +
       `grant_type=urn:ietf:params:oauth:grant-type:token-exchange\n` +
-      `&subject_token=${userIdToken}\n` +
-      `&subject_token_type=urn:ietf:params:oauth:token-type:id_token\n` +
+      `&subject_token=${subjectToken}\n` +
+      `&subject_token_type=${subjectTokenType}\n` +
       `&requested_token_type=urn:okta:params:oauth:token-type:vaulted-secret\n` +
       `&resource=${resourceOrn}\n` +
       `&client_id=${agentClientId}\n` +
@@ -242,7 +205,7 @@ export async function getVaultedSecret(userIdToken: string): Promise<VaultedSecr
       resource: resourceOrn,
       requestedTokenType: 'urn:okta:params:oauth:token-type:vaulted-secret',
       issuedTokenType: data.issued_token_type,
-      subjectTokenType: 'urn:ietf:params:oauth:token-type:id_token',
+      subjectTokenType,
       expiresIn: data.expires_in,
       clientAssertion,
       fetchedAt,

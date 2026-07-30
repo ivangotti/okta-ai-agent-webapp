@@ -9,11 +9,15 @@ An Okta-protected AI chatbot that uses **Okta AI Agent Identity** with **ID-JAG 
 **This repository includes:**
 - 🤖 AI Agent Webapp (main directory)
 - 🔧 NIST CSF 2.0 MCP Server (`nist-mcp-server/` directory)
-- 🔐 Users MCP Server (`users-mcp-server/` directory) - a second use case demonstrating **PAM-vaulted API keys** (see below)
+- 🔐 Users MCP Server (`users-mcp-server/` directory) - a second use case demonstrating **PAM-vaulted API keys** (see below), plus a third demonstrating **PAM-vaulted service-account credentials** retrieved through an **Agent-to-Agent (A2A) delegation chain**
 
 > 📋 **Note on MCP Server:** This repository includes an open-source implementation of the NIST Cybersecurity Framework 2.0 MCP (Model Context Protocol) server. The MCP server code is based on the open-source project available at [github.com/rocklambros/nist-csf-2-mcp-server](https://github.com/rocklambros/nist-csf-2-mcp-server) (MIT License). It is included here for convenience and demonstration purposes. The NIST Cybersecurity Framework is a public framework published by NIST, and this implementation provides programmatic access to the framework data for educational and development purposes.
 
 > 🔑 **No standing API key.** The `users-mcp-server` use case demonstrates a second, distinct pattern: the AI Agent never holds or caches the Okta API key it needs to call the Okta Users API. Every single time it needs to talk to that resource, it has to ask Okta for one. That key lives securely vaulted in **Okta Privileged Access Manager (PAM)**, and **Okta for AI Agents** wires a PAM connection into the Agent's Okta identity so the agent is authorized to request it. The agent proves who it is with a JWS (a signed JWT), and in exchange Okta hands back a short-lived, single-use vaulted secret - never a long-lived key sitting in `.env`. See [How It Works (Agent Retrieves Secret from PAM)](#how-it-works-agent-retrieves-secret-from-pam) for the full token flow.
+>
+> 🔗 **Agent-to-Agent delegation.** Both PAM exchanges above are now fronted by a two-hop **Agent-to-Agent (A2A)** delegation chain: "Agent A" (`users-mcp-server`'s primary identity) trades the user's ID token for an ID-JAG scoped to "Agent B", then redeems it at Agent B's Custom AS. Agent B - not Agent A - is the one that ultimately performs the PAM exchange, and the resulting access token's `act` claim records Agent A as the actor who invoked it. See [How It Works (Agent-to-Agent Delegation Chain)](#how-it-works-agent-to-agent-delegation-chain) below.
+>
+> 🏢 **Salesforce service account.** A third use case, `get_salesforce_service_account`, retrieves a Salesforce username/password vaulted in PAM (a different O4AA resource type than the vaulted secret above: `service-account`, not an arbitrary secret), then trades that credential for a real Salesforce session via Salesforce's own OAuth password grant - a second, entirely non-Okta hop. See [How It Works (Salesforce Service-Account Retrieval)](#how-it-works-salesforce-service-account-retrieval).
 
 ---
 
@@ -58,6 +62,7 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 
 1. **NIST CSF 2.0 lookups** (`nist-mcp-server`) - the agent exchanges the user's ID token for an **ID-JAG token**, then an **access token**, and uses that access token as a normal Bearer credential against the MCP server. The access token is valid for its full lifetime (1 hour) and can be reused across calls.
 2. **Okta user search** (`users-mcp-server`) - the agent holds **no API key at all**. On every call it exchanges the user's raw ID token for a **vaulted secret** pulled live from Okta PAM, uses it exactly once, and discards it. There is nothing long-lived to steal, leak, or rotate.
+3. **Salesforce service-account retrieval** (`users-mcp-server`) - same "no standing credential" pattern as (2), but for a different PAM resource type (`service-account`, returning a username/password instead of an arbitrary secret) and fronted by an **Agent-to-Agent delegation chain**: Agent A delegates to Agent B, and Agent B is the identity that actually retrieves the credential and logs into Salesforce with it.
 
 ### Key Concepts
 
@@ -78,9 +83,11 @@ This application demonstrates **Okta AI Agent architecture** where an AI agent c
 - ✅ **AI Agent Identity** - Agent has its own Okta identity
 - ✅ **ID-JAG Tokens** - Dual-identity tokens per IETF spec
 - ✅ **Claude AI Integration** - Powered by Anthropic Claude via LiteLLM
-- ✅ **MCP Tool Access** - 38 NIST CSF tools + Okta user search across two independent MCP servers
+- ✅ **MCP Tool Access** - 38 NIST CSF tools + Okta user search + Salesforce service-account retrieval, across two independent MCP servers
 - ✅ **PAM-Vaulted API Keys** - The agent holds no standing Okta API key; it requests a fresh, short-lived one from Okta Privileged Access Manager on every call (see [`users-mcp-server`](./users-mcp-server/README.md))
-- ✅ **Token Viewer** - Inspect all tokens and their claims
+- ✅ **PAM-Vaulted Service Accounts** - A second PAM resource type (`service-account`) vaults a Salesforce username/password instead of an arbitrary secret; retrieved fresh per call and then exchanged for a real Salesforce session via Salesforce's own OAuth
+- ✅ **Agent-to-Agent (A2A) Delegation** - Both PAM exchanges above are fronted by a two-hop ID-JAG chain (Agent A → Agent B) before the exchange runs, so the resulting token's `act` claim proves the full chain of custody: user → Agent A → Agent B
+- ✅ **Token Viewer** - Inspect all tokens and their claims, including the A2A chain-of-custody claim
 - ✅ **Security** - End-to-end token validation with JWKS
 - ✅ **MCP Server Status & Tools** - Live dashboard showing both MCP servers, their health, and their available tools
 
@@ -329,6 +336,114 @@ client_assertion={JWT signed with agent's private key}
 
 ---
 
+## How It Works (Agent-to-Agent Delegation Chain)
+
+Both PAM exchanges above (`search_users` and `get_salesforce_service_account`) are now fronted by a two-hop **Agent-to-Agent (A2A)** delegation chain, run fresh on every call, before the PAM exchange itself. There is no `actor_token` anywhere in this chain - the chain of custody lives entirely in the `act` claim Okta stamps into the resulting access token.
+
+**Why:** so the identity that actually performs the sensitive PAM exchange (Agent B) is a distinct, delegated identity from the one the webapp talks to (Agent A) - the token itself proves that Agent B acted on Agent A's delegated request, which itself acted on the user's behalf.
+
+### Simple Flow
+
+```
+1. Agent A (users-mcp-server's primary identity) reuses the caller's raw ID Token
+2. Agent A signs a client_assertion and token-exchanges it → gets an ID-JAG scoped to Agent B
+3. Agent A redeems that ID-JAG at Agent B's Custom AS (jwt-bearer) → gets a chained Access Token ("T3")
+4. T3's top-level `sub` is still the human user; its `act` claim names Agent A
+5. Agent B signs its own client_assertion and uses T3 as the subject_token for the PAM exchange
+   (vaulted-secret or service-account - see the two sections above)
+```
+
+### Complete Flow (2 Hops)
+
+#### Hop 1: ID-JAG for Agent B 🤖→🤖
+
+- **Client:** Agent A (`AGENT_CLIENT_ID`)
+- **Server:** Okta ORG Authorization Server
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/v1/token`
+- **Grant:** Token Exchange
+- **Requested token type:** `urn:ietf:params:oauth:token-type:id-jag`
+- **`audience`:** Agent B's Custom AS base URL (`https://your-okta-domain.okta.com/oauth2/{AGENT_B_AUTH_SERVER_ID}`)
+- **`resource`:** Agent B's registered `resourceUrl` (`AGENT_B_RESOURCE_URL`)
+- **`scope`:** `AGENT_B_SCOPE` (default `agent.invoke`)
+- **Auth:** Agent A signs with its own private key (RS256)
+
+#### Hop 1 Redeem: Access Token from Agent B's Custom AS 🔑
+
+- **Client:** Agent A (still - the redeeming party authenticates as Agent A, not Agent B)
+- **Server:** Agent B's Custom Authorization Server
+- **Endpoint:** `https://your-okta-domain.okta.com/oauth2/{AGENT_B_AUTH_SERVER_ID}/v1/token`
+- **Grant:** `urn:ietf:params:oauth:grant-type:jwt-bearer`
+- **`assertion`:** the ID-JAG from Hop 1
+- **Auth:** a fresh Agent A client_assertion (RS256) - no `scope` param, inherited from the ID-JAG
+
+**Resulting access token ("T3") claims:**
+```json
+{
+  "sub": "USER_ID_FROM_OKTA",
+  "aud": "https://your-okta-domain.okta.com/oauth2/AGENT_B_AUTH_SERVER_ID",
+  "scope": "agent.invoke",
+  "act": {
+    "sub": "AGENT_A_CLIENT_ID"
+  }
+}
+```
+
+T3 is then handed to the vaulted-secret or service-account exchange as `subject_token` (type `access_token`, not `id_token`), signed with **Agent B's** private key instead of Agent A's.
+
+### Critical Rules
+
+| Rule | Why |
+|------|-----|
+| **No `actor_token`** | Chain of custody comes entirely from Okta's own `act` claim, not a token this codebase constructs |
+| **Redeem still signs as Agent A** | Agent A is authenticating to Agent B's Custom AS on its own behalf, using the ID-JAG it was just issued |
+| **T3's `subject_token_type` = `access_token`** | Downstream PAM exchanges must know T3 isn't a raw ID token |
+| **Downstream PAM exchange signs as Agent B** | So the eventual secret/credential is retrieved by Agent B, with Agent A recorded in `act` |
+| **Setup prerequisites** | Agent B registered + activated as an AI Agent, a delegation link Agent A → Agent B, and a managed connection (`IDENTITY_ASSERTION_A2A_SERVER`) from Agent A to Agent B's Custom AS - all configured once in Okta, ahead of time |
+
+---
+
+## How It Works (Salesforce Service-Account Retrieval)
+
+`get_salesforce_service_account` follows the same "ask Okta fresh, every call" philosophy as `search_users`, but targets a different PAM resource type and requires a second, non-Okta hop before the credential is actually usable.
+
+### Simple Flow
+
+```
+1. A2A delegation chain runs first (see above) → chained Access Token (T3), signed by Agent B
+2. Agent B exchanges T3 for a Salesforce service-account credential (Okta PAM, resource = SERVICE_ACCOUNT_RESOURCE_ORN)
+3. Okta returns { username, password } - not a bearer token or API key
+4. Agent B logs into Salesforce directly with that username/password (Salesforce's own OAuth, password grant)
+5. Salesforce returns an access_token + instance_url - a normal Salesforce session
+```
+
+### Key Differences from the Vaulted-Secret Flow
+
+| | Vaulted Secret (`search_users`) | Service Account (`get_salesforce_service_account`) |
+|---|---|---|
+| **`requested_token_type`** | `urn:okta:params:oauth:token-type:vaulted-secret` | `urn:okta:params:oauth:token-type:service-account` |
+| **Okta response shape** | `vaulted_secret.apikey` (or `.private`/`.password`) | `service_account.{username, password}` |
+| **Directly usable?** | Yes - used as-is as the `SSWS` header | No - Salesforce doesn't accept it directly; requires a second OAuth hop |
+| **`resource` env var** | `VAULTED_SECRET_RESOURCE_ORN` | `SERVICE_ACCOUNT_RESOURCE_ORN` |
+
+### Hop 2: Salesforce OAuth Login (non-Okta) 🏢
+
+- **Client:** `users-mcp-server` itself, using a Salesforce **Connected App**
+- **Endpoint:** `{SALESFORCE_LOGIN_URL}/services/oauth2/token`
+- **Grant:** `password` (OAuth 2.0 Resource Owner Password Credentials)
+- **Body:** `client_id`, `client_secret` (the Connected App), `username`, `password` (the PAM-retrieved service account)
+
+Gated on `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` being configured. If either is missing, the tool still succeeds (the PAM retrieval is the thing being demonstrated) and reports `salesforceLogin.attempted: false`/`skippedReason` instead of failing outright.
+
+### Critical Rules
+
+| Rule | Why |
+|------|-----|
+| **Never cache the username/password** | Same 5-minute-TTL-style philosophy as the vaulted secret - fetched fresh every call |
+| **Password never logged at info level** | Only visible via the explicit `DEBUG` reveal button / `LOG_LEVEL=debug`, same redaction convention as the vaulted secret |
+| **Salesforce login failure ≠ tool failure** | The PAM retrieval succeeding is the primary thing demonstrated; a downstream Salesforce outage shouldn't fail the whole call |
+
+---
+
 ## Installation & Setup
 
 ### Prerequisites
@@ -336,6 +451,7 @@ client_assertion={JWT signed with agent's private key}
 - Node.js 20.x or higher
 - Okta organization with AI Agent support
 - For the `users-mcp-server` use case: a PAM-managed connection holding an Okta API key, with the Agent identity granted an **Okta for AI Agents → PAM** integration authorizing it to request that specific vaulted secret
+- For the Salesforce service-account use case: a second Agent identity ("Agent B") registered and activated as an AI Agent, a delegation link from Agent A → Agent B, a PAM-managed connection holding a Salesforce service-account credential, and (optionally) a Salesforce Connected App for the downstream OAuth login - see [`users-mcp-server/README.md`](./users-mcp-server/README.md#configuration-env) for the full variable list
 - LiteLLM API access
 - Git
 
@@ -558,8 +674,9 @@ The MCP server validates every request:
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/health` | GET | - | MCP health check |
-| `/api/tools` | GET | - | List the `search-users` tool |
-| `/api/tools/search-users` | POST | **User's raw ID token required** | Search Okta users - the agent exchanges this token for a fresh PAM vaulted secret on every single call; **no API key is ever cached** |
+| `/api/tools` | GET | - | List the `search-users` and `get-salesforce-service-account` tools |
+| `/api/tools/search-users` | POST | **User's raw ID token required** | Search Okta users - the agent exchanges this token (via the A2A chain) for a fresh PAM vaulted secret on every single call; **no API key is ever cached** |
+| `/api/tools/get-salesforce-service-account` | POST | **User's raw ID token required** | Retrieve the Salesforce service-account credential vaulted in PAM, then log into Salesforce with it - fresh on every call; **no credential is ever cached** |
 
 ---
 
@@ -582,10 +699,16 @@ okta-ai-agent-webapp/
 │   ├── data/              # NIST CSF framework data
 │   ├── scripts/           # Setup scripts
 │   └── package.json       # MCP dependencies
-└── users-mcp-server/      # Users MCP Server (PAM vaulted-secret auth - no standing API key)
-    ├── src/               # TypeScript source
+└── users-mcp-server/      # Users MCP Server (PAM vaulted-secret + service-account auth - no standing credentials)
+    ├── src/
+    │   ├── services/      # okta-token-exchange.ts (vaulted secret), okta-service-account-exchange.ts
+    │   │                  # (Salesforce service account), agent-a2a-chain.ts (Agent A -> Agent B delegation),
+    │   │                  # salesforce-login.ts (non-Okta OAuth hop)
+    │   ├── tools/         # search_users.ts, get_salesforce_service_account.ts
+    │   ├── utils/         # agent-assertion.ts (shared private_key_jwt signing, keyed per agent identity)
+    │   └── ...            # TypeScript source
     ├── dist/              # Compiled JavaScript
-    ├── README.md          # Full vaulted-secret token-exchange details
+    ├── README.md          # Full vaulted-secret / service-account / A2A token-exchange details
     └── package.json       # MCP dependencies
 ```
 
@@ -630,7 +753,13 @@ Click your username in the header to see:
 - **Copyable** - Copy raw JWT for inspection
 
 ### Token Flow Diagram
-Shows the 3-step process with real client IDs and server URLs.
+Shows the 3-step process with real client IDs and server URLs. Once the agent has run a PAM flow at least once, this area instead shows whichever flow it most recently actually used (`agentTokens.lastFlow`): the plain ID-JAG diagram, the A2A delegation chain diagram followed by the vaulted-secret diagram, or the A2A chain followed by the Salesforce service-account diagram. Only one is shown at a time - never all three at once.
+
+### A2A Delegation Chain (Agent A → Agent B)
+Shown whenever the most recent flow used A2A delegation (both PAM flows do, currently). Displays both hops in full - request `client_assertion` and response for the ID-JAG, then for the chained access token (T3) - plus a rendered **chain-of-custody** list walking `sub` → `act.sub` → ... down to the final actor. Nothing here is redacted; these are short-lived OAuth bearer tokens, not standing credentials.
+
+### PAM Service-Account Exchange
+Shown after a `get_salesforce_service_account` call. Same redaction convention as the vaulted-secret card (password swapped for `REDACTED` until the `DEBUG` button reveals it), plus the downstream Salesforce login outcome (instance URL if it succeeded, or the skip/failure reason if not).
 
 ---
 
@@ -672,7 +801,24 @@ Adding a third MCP server later needs no frontend changes - just register it in 
 ### Vaulted-secret exchange failed (e.g. "invalid resource" or "unauthorized_client")
 - Confirm the Agent identity has an active **Okta for AI Agents → PAM** integration granting it access to the specific managed connection - this is configured once in Okta, ahead of time, and is what authorizes the agent to request the key at all
 - Check `VAULTED_SECRET_RESOURCE_ORN` in `users-mcp-server/.env` matches the PAM connection's actual ORN
-- Remember: the subject_token here must be the user's **raw ID token**, not an ID-JAG or access token - PAM validates it directly
+- Remember: as of the A2A delegation chain, the subject_token for this exchange is the **chained access token (T3)**, not the raw user ID token directly - see the A2A section above
+
+### A2A hop 1 (ID-JAG for Agent B) failed
+- Confirm `AGENT_B_CLIENT_ID`, `AGENT_B_RESOURCE_URL`, and `AGENT_B_AUTH_SERVER_ID` are all set in `users-mcp-server/.env` - all three are required, with no fallback
+- Confirm the delegation link Agent A → Agent B exists in Okta, and the managed connection (`IDENTITY_ASSERTION_A2A_SERVER`) from Agent A to Agent B's Custom AS is active
+- Check `AGENT_B_SCOPE` (default `agent.invoke`) is a scope Agent B's Custom AS policy actually grants for `client_credentials` + `jwt-bearer`
+
+### A2A hop 1 redeem (access token from Agent B's Custom AS) failed
+- This redemption is still signed as **Agent A** (not Agent B) - a mismatched `client_assertion` signer here is the most common cause
+- Confirm `AGENT_B_AUTH_SERVER_ID` points at the Custom AS actually linked to Agent B via `resource-servers/api/v1/a2a-servers/{agentBId}/authorization-servers`
+
+### Service-account exchange failed (e.g. "invalid resource")
+- Confirm `SERVICE_ACCOUNT_RESOURCE_ORN` in `users-mcp-server/.env` matches the PAM-managed Salesforce service account's actual ORN
+- Confirm Agent B (not Agent A) has the PAM integration authorizing it to request this specific service account - the exchange signs as Agent B, using `AGENT_B_PRIVATE_KEY_PATH`
+
+### Salesforce login shows "skipped" in the Token Architecture viewer
+- This is expected if `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` aren't set - the PAM retrieval itself still succeeds; only the downstream, non-Okta Salesforce OAuth hop is skipped
+- If login was attempted but failed, check the `skippedReason` shown in the viewer - it's the raw error from Salesforce's `/services/oauth2/token` endpoint
 
 ### "MCP Server Status & Tools" modal shows `Error: Server error: 401`
 - This means your webapp login session expired, not that a downstream MCP server is down - re-login and it will resolve
@@ -713,6 +859,8 @@ node test-id-jag.js
 - ✅ Full audit trail (user + agent in every request)
 - ✅ No standing Okta API key for `users-mcp-server` - a fresh, short-lived vaulted secret is requested from Okta PAM on every `search_users` call and is never cached or persisted
 - ✅ Vaulted secret values are never logged - only the endpoint, resource ORN, and success/failure are recorded
+- ✅ No standing Salesforce credential either - `get_salesforce_service_account` requests a fresh username/password from PAM on every call, and the resulting Salesforce session is never cached
+- ✅ A2A delegation chain tokens (ID-JAG, chained access token) are shown in the clear in the viewer - they're short-lived bearer tokens, same tier as the ID-JAG/MCP access token already shown elsewhere - but the vaulted secret and service-account password downstream of them are still redacted by default
 
 ---
 

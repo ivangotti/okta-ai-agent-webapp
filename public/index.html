@@ -697,7 +697,7 @@
     <div class="modal" onclick="event.stopPropagation()" style="max-width: 1664px; max-height: 102vh;">
       <div class="modal-header">
         <h2>
-          <button id="pamDebugBtn" onclick="toggleDebugReveal()" title="Reveal the real (unredacted) vaulted secret value for local debugging" style="background: #ef4444; color: #fff; border: none; border-radius: 4px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; padding: 3px 8px; margin-right: 0.6rem; cursor: pointer; vertical-align: middle;">DEBUG</button>
+          <button id="pamDebugBtn" onclick="toggleDebugReveal()" title="Reveal the real (unredacted) vaulted secret or service-account password for local debugging" style="background: #ef4444; color: #fff; border: none; border-radius: 4px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; padding: 3px 8px; margin-right: 0.6rem; cursor: pointer; vertical-align: middle;">DEBUG</button>
           OAuth Token Architecture
         </h2>
         <button class="modal-close" onclick="closeTokenModal()">&times;</button>
@@ -931,13 +931,14 @@
       // at least one message to the agent this session, and the viewer
       // shows only USER + APP until then.
       const interacted = Boolean(agentTokens?.interacted);
-      // The two diagrams are mutually exclusive - only whichever flow the
+      // The three diagrams are mutually exclusive - only whichever flow the
       // agent most recently actually used gets shown, per agentTokens.lastFlow
       // (set in server.js at the same point each flow's own cache is
-      // populated). Before either flow has ever run, default to the ID-JAG
+      // populated). Before any flow has ever run, default to the ID-JAG
       // diagram in its pre-interaction (USER + APP only) state.
       const showPam = agentTokens?.lastFlow === 'users-mcp' && Boolean(agentTokens?.vaultedSecretExchange);
-      const showIdJag = !showPam;
+      const showServiceAccount = agentTokens?.lastFlow === 'salesforce-service-account' && Boolean(agentTokens?.serviceAccountExchange);
+      const showIdJag = !showPam && !showServiceAccount;
 
       const delegationStepsHtml = !interacted ? '' : `
               <!-- arrow: id_token / delegated -->
@@ -1067,9 +1068,151 @@
         </div>
       `;
 
+      const showA2AChain = (showPam || showServiceAccount) && Boolean(agentTokens?.a2aChain);
+      // Once the A2A chain ran, the old single-hop PAM/service-account
+      // diagrams below are no longer an accurate picture on their own - they
+      // depict "APP" presenting the raw id_token directly to PAM, but it's
+      // actually Agent B presenting the chained access token from the A2A
+      // diagram above. Hide them for A2A flows; the raw request/response
+      // JSON for that final exchange still shows up in the detail cards
+      // further down, which aren't affected by this.
+      const showOldPamDiagram = showPam && !showA2AChain;
+      const showOldServiceAccountDiagram = showServiceAccount && !showA2AChain;
+
       return `
         ${idJagDiagramHtml}
-        ${showPam ? renderPamArchitectureDiagram(agentTokens.vaultedSecretExchange, { agentClientId, agentName, userDisplayName, userSub }) : ''}
+        ${showA2AChain ? renderA2AChainDiagram(agentTokens.a2aChain, { agentClientId, agentName, userDisplayName, userSub }) : ''}
+        ${showOldPamDiagram ? renderPamArchitectureDiagram(agentTokens.vaultedSecretExchange, { agentClientId, agentName, userDisplayName, userSub }) : ''}
+        ${showOldServiceAccountDiagram ? renderServiceAccountArchitectureDiagram(agentTokens.serviceAccountExchange, { agentClientId, agentName, userDisplayName, userSub }) : ''}
+      `;
+    }
+
+    // Renders the Agent-to-Agent (A2A) delegation chain that runs
+    // immediately before either PAM diagram above: Agent A trades the
+    // user's id_token for an ID-JAG scoped to Agent B, then redeems it at
+    // Agent B's Custom AS for a real access token ("T3"). That token is
+    // what carries the `act` chain-of-custody claim - highlighted here
+    // rather than left to the generic raw-claims card, per Ivan's ask.
+    function renderA2AChainDiagram(a2a, { agentName, userDisplayName, userSub }) {
+      const claims = a2a.chainedAccessToken?.parsed || {};
+      // The chain of custody starts at the human (the token's own top-level
+      // `sub` - always the resource owner, never nested inside `act`), then
+      // descends through each actor in `act`/`act.act`/... down to whoever
+      // actually holds the token. Rendering the human as entry 0 here -
+      // rather than as a separate row above this list - makes it visually
+      // part of "the chain" instead of looking omitted from it.
+      const chainEntries = [{ label: 'sub', value: claims.sub || userSub, note: 'human · requested this action' }];
+      let node = claims.act;
+      let depth = 1;
+      while (node && depth <= 4) {
+        chainEntries.push({ label: `${'act.'.repeat(depth)}sub`, value: node.sub, note: node.sub_profile || '' });
+        node = node.act;
+        depth++;
+      }
+      const actChainRows = chainEntries.map((entry, i) => `
+        <div style="display: flex; gap: 0.5rem; padding-left: ${i * 14}px;">
+          <span style="color: #64748b; min-width: ${84 - i * 14}px;">${entry.label}</span>
+          <span style="color: ${i === 0 ? '#fbbf24' : '#d8b4fe'}; word-break: break-all;">${escapeHtml(String(entry.value || '—'))}</span>
+          <span style="color: #64748b;">${escapeHtml(entry.note ? `(${entry.note})` : '')}</span>
+        </div>`);
+      const subtitle = `Retrieved ${new Date(a2a.requestedAt).toLocaleString()} · ${escapeHtml(userDisplayName)} → Agent A (${escapeHtml(a2a.agentAClientId)}) → Agent B (${escapeHtml(a2a.agentBClientId)})`;
+
+      return `
+        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #c084fc;">
+          <h3 style="color: #e2e8f0; margin: 0 0 0.25rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Users MCP Server — Agent-to-Agent Delegation (Agent A → Agent B)</h3>
+          <div style="color: #64748b; font-size: 0.68rem; margin-bottom: 0.75rem;">${subtitle}</div>
+          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
+            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1560px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
+
+              <!-- IDENTITY · USER (the human who started this - the sub of every token in this chain) -->
+              <div style="flex: 1; min-width: 200px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${escapeHtml(userDisplayName)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(userSub)}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">role</span><span style="color: #e2e8f0;">requested the agent action</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: id_token -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">id_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #4ade80; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #4ade80; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">subject_token</div>
+              </div>
+
+              <!-- A2A · AGENT A -->
+              <div style="flex: 1; min-width: 220px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #4c1d95; color: #d8b4fe; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">A2A · HOP 1</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">AGENT A → ID-JAG</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">actor</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(a2a.agentAClientId)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">audience</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(a2a.hop1.audience)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">resource</span><span style="color: #d8b4fe; word-break: break-all;">${escapeHtml(a2a.hop1.resource)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">scope</span><span style="color: #e2e8f0;">${escapeHtml(a2a.hop1.scope)}</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: ID-JAG JWT -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">ID-JAG JWT</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #c084fc; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #c084fc; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">jwt-bearer redeem</div>
+              </div>
+
+              <!-- A2A · CHAINED ACCESS TOKEN (highlighted - the act chain-of-custody token) -->
+              <div style="flex: 1.5; min-width: 320px; background: #1e1033; border: 2px solid #c084fc; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 4px rgba(192, 132, 252, 0.1);">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #6b21a8;">
+                  <span style="background: #6b21a8; color: #e9d5ff; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">A2A · CHAIN OF CUSTODY</span>
+                  <span style="color: #e9d5ff; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">CHAINED ACCESS TOKEN</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 34px;">aud</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(String(claims.aud || '—'))}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 34px;">scope</span><span style="color: #e2e8f0;">${escapeHtml(String(claims.scope || '—'))}</span></div>
+                  <div style="margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px dashed #6b21a8;">
+                    <div style="color: #d8b4fe; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em; margin-bottom: 0.25rem;">chain of custody (root user → final actor)</div>
+                    ${actChainRows.join('') || '<div style="color: #64748b;">no act claim present</div>'}
+                  </div>
+                </div>
+              </div>
+
+              <!-- arrow: Access Token -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">Access Token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #c084fc; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #c084fc; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">to Agent B</div>
+              </div>
+
+              <!-- A2A · AGENT B -->
+              <div style="flex: 1; min-width: 220px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #4c1d95; color: #d8b4fe; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">A2A · HOP 2</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">AGENT B</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">actor</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(a2a.agentBClientId)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">signs</span><span style="color: #e2e8f0;">own private_key_jwt</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">next</span><span style="color: #e2e8f0;">runs the PAM exchange below</span></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+          <div style="margin-top: 0.75rem; font-size: 0.65rem; color: #64748b; font-family: monospace;">
+            Flow: ${escapeHtml(userDisplayName)} signs in (OIDC) → Agent A (${escapeHtml(agentName)}) reuses their id_token, signs it with its own private key, and token-exchanges at Okta ORG for an ID-JAG scoped to Agent B → redeems that ID-JAG via jwt-bearer at Agent B's Custom AS → gets back a real access token whose top-level <code>sub</code> is still ${escapeHtml(userDisplayName)}, with an <code>act</code> claim naming every actor who touched it since. Agent B then presents that access token, signed with its own key, for the PAM exchange shown next.
+          </div>
+        </div>
       `;
     }
 
@@ -1079,6 +1222,15 @@
     function renderTokenCards(data) {
       const { userTokens, agentTokens } = data;
       const interacted = Boolean(agentTokens?.interacted);
+      // vaultedSecretExchange/serviceAccountExchange each persist in their
+      // own server-side cache slot for the whole session, independently of
+      // one another - so once both flows have run at least once, both come
+      // back non-null forever, even though only one of them is what the
+      // agent actually just did. Gate each card on lastFlow (same signal
+      // renderTokenDiagrams already uses for the diagrams above) so this
+      // section only shows what's relevant to the most recent call.
+      const showPamCard = agentTokens?.lastFlow === 'users-mcp' && Boolean(agentTokens?.vaultedSecretExchange);
+      const showServiceAccountCard = agentTokens?.lastFlow === 'salesforce-service-account' && Boolean(agentTokens?.serviceAccountExchange);
 
       return `
         <div class="token-section">
@@ -1151,7 +1303,47 @@
         </div>
         `}
 
-        ${agentTokens?.vaultedSecretExchange ? `
+        ${agentTokens?.a2aChain ? `
+        <div class="token-section" style="border: 2px solid #c084fc; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1e1033;">
+          <h3>
+            <span style="color: #c084fc;">●</span> A2A Delegation Chain (Agent A → Agent B)
+            <span class="badge" style="background: #6b21a8; color: #e9d5ff;">ORG token endpoint → Agent B Custom AS</span>
+          </h3>
+          <div style="font-size: 0.75rem; color: #e9d5ff; margin-bottom: 0.75rem;">
+            Two HTTP calls, both signed by Agent A (${escapeHtml(agentTokens.a2aChain.agentAClientId)}): first a token-exchange for an ID-JAG scoped to Agent B, then a jwt-bearer redemption of that ID-JAG at Agent B's Custom AS. Every request and response JSON below is shown in full - these are short-lived bearer tokens, not standing credentials, so nothing here is redacted.
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.4rem;">
+            <span>Hop 1 → Request: client_assertion (JWS)</span>
+            ${agentTokens.a2aChain.hop1.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.a2aChain.hop1.clientAssertion.raw}')">Copy</button>` : ''}
+          </div>
+          <div class="token-raw">${agentTokens.a2aChain.hop1.clientAssertion?.raw || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.a2aChain.hop1.clientAssertion?.parsed)}</div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin: 0.85rem 0 0.4rem;">
+            <span>Hop 1 ← Response: ID-JAG</span>
+            ${agentTokens.a2aChain.hop1.idJag ? `<button class="copy-btn" onclick="copyToken('${agentTokens.a2aChain.hop1.idJag}')">Copy</button>` : ''}
+          </div>
+          <div class="token-raw">${agentTokens.a2aChain.hop1.idJag || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.a2aChain.hop1.idJagClaims)}</div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin: 0.85rem 0 0.4rem;">
+            <span>Hop 1 redeem → Request: client_assertion (JWS)</span>
+            ${agentTokens.a2aChain.hop1Redeem.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.a2aChain.hop1Redeem.clientAssertion.raw}')">Copy</button>` : ''}
+          </div>
+          <div class="token-raw">${agentTokens.a2aChain.hop1Redeem.clientAssertion?.raw || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.a2aChain.hop1Redeem.clientAssertion?.parsed)}</div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin: 0.85rem 0 0.4rem;">
+            <span>Hop 1 redeem ← Response: chained access token (carries the <code>act</code> chain-of-custody claim)</span>
+            ${agentTokens.a2aChain.chainedAccessToken?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.a2aChain.chainedAccessToken.raw}')">Copy</button>` : ''}
+          </div>
+          <div class="token-raw">${agentTokens.a2aChain.chainedAccessToken?.raw || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.a2aChain.chainedAccessToken?.parsed)}</div>
+        </div>
+        ` : ''}
+
+        ${showPamCard ? `
         <div class="token-section" style="border: 2px solid #fb7185; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #1c1917;">
           <h3>
             <span style="color: #fb7185;">●</span> PAM Token Exchange
@@ -1178,6 +1370,40 @@
           <pre id="pamRawResponsePre" style="background: var(--bg-token-raw); border: 1px solid var(--border-modal); border-radius: 6px; padding: 0.75rem; margin: 0 0 0.75rem 0; font-family: 'SF Mono', Monaco, monospace; font-size: 0.75rem; color: var(--color-token-raw); white-space: pre-wrap; word-break: break-word;">${agentTokens.vaultedSecretExchange.rawResponseRedacted ? escapeHtml(JSON.stringify(agentTokens.vaultedSecretExchange.rawResponseRedacted, null, 2)) : 'Not available'}</pre>
           <div style="font-size: 0.68rem; color: #94a3b8;">
             search_users(${escapeHtml(describePamQuery(agentTokens.vaultedSecretExchange.toolInput))}) → ${agentTokens.vaultedSecretExchange.resultCount ?? '—'} result(s)
+          </div>
+        </div>
+        ` : ''}
+
+        ${showServiceAccountCard ? `
+        <div class="token-section" style="border: 2px solid #2dd4bf; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #042f2e;">
+          <h3>
+            <span style="color: #2dd4bf;">●</span> PAM Service-Account Exchange
+            <span class="badge" style="background: #115e59; color: #99f6e4;">ORG token endpoint · password redacted</span>
+          </h3>
+          <div style="font-size: 0.75rem; color: #99f6e4; margin-bottom: 0.75rem;">
+            One HTTP call to Okta's token endpoint - the agent's signed request below, and Okta's response to it - exchanging the user's raw id_token for a Salesforce username/password scoped to resource: ${escapeHtml(agentTokens.serviceAccountExchange.resource)}
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.4rem;">
+            <span>→ Request: client_assertion (JWS)</span>
+            ${agentTokens.serviceAccountExchange.clientAssertion?.raw ? `<button class="copy-btn" onclick="copyToken('${agentTokens.serviceAccountExchange.clientAssertion.raw}')">Copy</button>` : ''}
+          </div>
+          <div class="token-raw">${agentTokens.serviceAccountExchange.clientAssertion?.raw || 'Not available'}</div>
+          <div class="token-parsed">${renderClaims(agentTokens.serviceAccountExchange.clientAssertion?.parsed)}</div>
+
+          <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #94a3b8; margin: 0.85rem 0 0.4rem;">
+            <span>← Response: Okta token-exchange body</span>
+            ${agentTokens.serviceAccountExchange.rawResponseRedacted ? `<button class="copy-btn" onclick="copyPreContent('saRawResponsePre')">Copy</button>` : ''}
+          </div>
+          <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.4rem;">
+            The password itself is redacted here, but visible in this server's own debug logs (LOG_LEVEL=debug on users-mcp-server) for local debugging.
+          </div>
+          <pre id="saRawResponsePre" style="background: var(--bg-token-raw); border: 1px solid var(--border-modal); border-radius: 6px; padding: 0.75rem; margin: 0 0 0.75rem 0; font-family: 'SF Mono', Monaco, monospace; font-size: 0.75rem; color: var(--color-token-raw); white-space: pre-wrap; word-break: break-word;">${agentTokens.serviceAccountExchange.rawResponseRedacted ? escapeHtml(JSON.stringify(agentTokens.serviceAccountExchange.rawResponseRedacted, null, 2)) : 'Not available'}</pre>
+          <div style="font-size: 0.68rem; color: #94a3b8;">
+            get_salesforce_service_account() → username ${escapeHtml(agentTokens.serviceAccountExchange.username || '—')}
+            ${agentTokens.serviceAccountExchange.salesforceLogin?.loggedIn
+              ? ` · Salesforce login succeeded (${escapeHtml(agentTokens.serviceAccountExchange.salesforceLogin.instanceUrl || '')})`
+              : ` · Salesforce login ${agentTokens.serviceAccountExchange.salesforceLogin?.attempted ? 'skipped/failed' : 'not attempted'}${agentTokens.serviceAccountExchange.salesforceLogin?.skippedReason ? ` (${escapeHtml(agentTokens.serviceAccountExchange.salesforceLogin.skippedReason)})` : ''}`}
           </div>
         </div>
         ` : ''}
@@ -1302,6 +1528,137 @@
       `;
     }
 
+    // Only ever called once agentTokens.serviceAccountExchange is populated -
+    // i.e. after a real get_salesforce_service_account call has actually run
+    // - so, like renderPamArchitectureDiagram, this doesn't need an empty
+    // state; the caller in renderTokenDiagrams omits it entirely until then.
+    // Unlike the vaulted-secret flow, this one has a genuine second hop:
+    // Okta hands back a Salesforce username/password (not a bearer token),
+    // which the agent then exchanges again - with Salesforce itself, not
+    // Okta - for an actual Salesforce session.
+    function renderServiceAccountArchitectureDiagram(sa, { agentClientId, agentName, userDisplayName, userSub }) {
+      const loggedIn = Boolean(sa.salesforceLogin?.loggedIn);
+      const loginAttempted = Boolean(sa.salesforceLogin?.attempted);
+      const subtitle = `Retrieved ${new Date(sa.requestedAt).toLocaleString()} · get_salesforce_service_account() → ${loggedIn ? 'Salesforce session established' : (loginAttempted ? 'Salesforce login skipped/failed' : 'PAM credential retrieved')}`;
+
+      return `
+        <div style="margin-bottom: 1.5rem; padding: 1rem; background: #0b1220; border-radius: 8px; border-left: 4px solid #2dd4bf;">
+          <h3 style="color: #e2e8f0; margin: 0 0 0.25rem 0; font-size: 0.95rem; letter-spacing: 0.02em;">Users MCP Server — PAM Service-Account Exchange</h3>
+          <div style="color: #64748b; font-size: 0.68rem; margin-bottom: 0.75rem;">${subtitle}</div>
+          <div style="overflow-x: auto; padding-bottom: 0.5rem;">
+            <div style="display: flex; align-items: stretch; gap: 0; min-width: 1480px; font-family: 'SF Mono', Menlo, Consolas, monospace;">
+
+              <!-- IDENTITY · USER -->
+              <div style="flex: 1; min-width: 190px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e3a8a; color: #93c5fd; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">IDENTITY</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">USER</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">who</span><span style="color: #e2e8f0;">${escapeHtml(userDisplayName)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">sub</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(userSub)}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">token</span><span style="color: #f59e0b;">raw id_token · reused as subject_token</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: subject_token -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">subject_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #2dd4bf; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #2dd4bf; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">raw id_token</div>
+              </div>
+
+              <!-- APP · APP -->
+              <div style="flex: 1; min-width: 190px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">APP</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">APP</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.95;">
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">name</span><span style="color: #e2e8f0;">${escapeHtml(agentName)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 44px;">cid</span><span style="color: #fbbf24; word-break: break-all;">${escapeHtml(agentClientId)}</span></div>
+                  <div><span style="color: #64748b; display: inline-block; width: 44px;">creds</span><span style="color: #e2e8f0;">none stored - requests a service account per call</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: JWS client_assertion -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">JWS</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #2dd4bf; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #2dd4bf; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">client_assertion</div>
+              </div>
+
+              <!-- PAM · SERVICE ACCOUNT (highlighted) -->
+              <div style="flex: 1.15; min-width: 230px; background: #042f2e; border: 2px solid #2dd4bf; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.08);">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #115e59;">
+                  <span style="background: #115e59; color: #99f6e4; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">PAM</span>
+                  <span style="color: #99f6e4; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">SERVICE ACCOUNT</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">requested</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(sa.requestedTokenType)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">resource</span><span style="color: #99f6e4; word-break: break-all;">${escapeHtml(sa.resource)}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">username</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(sa.username || '—')}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 62px;">ttl</span><span style="color: #e2e8f0;">${sa.expiresIn ? sa.expiresIn + 's' : '—'}</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: username/password -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 100px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">service_account</div>
+                <div style="position: relative; width: 100%; height: 2px; background: #2dd4bf; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid #2dd4bf; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">username + password · redacted</div>
+              </div>
+
+              <!-- HOP 2 · SALESFORCE OAUTH (second, non-Okta hop) -->
+              <div style="flex: 1.05; min-width: 220px; background: #0f172a; border: 1px solid #0176d3; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #0176d3;">
+                  <span style="background: #04315b; color: #7cc4fa; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">HOP 2 · NON-OKTA</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">SALESFORCE OAUTH</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">what</span><span style="color: #e2e8f0;">agent trades the vaulted creds for a session</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">grant</span><span style="color: #e2e8f0;">password (OAuth 2.0)</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">status</span><span style="color: ${loggedIn ? '#4ade80' : '#f59e0b'};">${loggedIn ? 'logged in' : (loginAttempted ? (escapeHtml(sa.salesforceLogin?.skippedReason || 'not logged in')) : 'not attempted')}</span></div>
+                </div>
+              </div>
+
+              <!-- arrow: Salesforce access_token -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 90px; padding: 0 0.4rem;">
+                <div style="font-size: 0.62rem; color: #cbd5e1; font-weight: 600;">access_token</div>
+                <div style="position: relative; width: 100%; height: 2px; background: ${loggedIn ? '#0176d3' : '#334155'}; margin: 6px 0;">
+                  <div style="position: absolute; right: -1px; top: -4px; width: 0; height: 0; border-left: 8px solid ${loggedIn ? '#0176d3' : '#334155'}; border-top: 5px solid transparent; border-bottom: 5px solid transparent;"></div>
+                </div>
+                <div style="font-size: 0.55rem; color: #64748b; letter-spacing: 0.08em;">${loggedIn ? 'Bearer · Salesforce' : 'skipped'}</div>
+              </div>
+
+              <!-- HOST · SALESFORCE API -->
+              <div style="flex: 1; min-width: 210px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+                <div style="background: #0b1220; padding: 0.55rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid #1f2937;">
+                  <span style="background: #1e293b; color: #94a3b8; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 3px;">HOST</span>
+                  <span style="color: #f1f5f9; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;">SALESFORCE API</span>
+                </div>
+                <div style="padding: 0.7rem 0.75rem; font-size: 0.66rem; line-height: 1.85;">
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">target</span><span style="color: #e2e8f0; word-break: break-all;">${escapeHtml(sa.salesforceLogin?.instanceUrl || '—')}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">auth</span><span style="color: #e2e8f0;">${loggedIn ? 'Bearer {redacted}' : '—'}</span></div>
+                  <div style="display: flex; gap: 0.5rem;"><span style="color: #64748b; min-width: 56px;">lifespan</span><span style="color: #e2e8f0;">single session · then discarded</span></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+          <div style="margin-top: 0.75rem; font-size: 0.65rem; color: #64748b; font-family: monospace;">
+            Flow: Agent reuses the user's raw id_token → signs a fresh JWS (private_key_jwt) → exchanges both at Okta ORG for a Salesforce service-account credential (username/password) scoped to the PAM connection → hands that credential to Salesforce's own OAuth token endpoint (password grant, a second and entirely separate hop) → gets back a Salesforce session. Neither the password nor the Salesforce access token is ever cached.
+          </div>
+        </div>
+      `;
+    }
+
     function renderClaims(parsed) {
       if (!parsed) return '<div class="token-claim"><div class="token-claim-value">Unable to parse token</div></div>';
 
@@ -1361,14 +1718,18 @@
     }
 
     // Red "DEBUG" button next to the OAuth Token Architecture title. Reveals
-    // the real (unredacted) vaulted-secret value in the currently-displayed
-    // "Vaulted-Secret Exchange Response" JSON block, for local debugging
-    // only - see /api/agent/debug-reveal-secret and getLastRevealableSecret()
-    // in users-mcp-server.
+    // the real (unredacted) value in whichever exchange-response JSON block
+    // is currently displayed - the vaulted secret (search_users) or the
+    // Salesforce service-account password (get_salesforce_service_account) -
+    // for local debugging only. See /api/agent/debug-reveal-secret /
+    // /api/agent/debug-reveal-service-account and their respective
+    // getLastRevealable*() functions in users-mcp-server.
     async function toggleDebugReveal() {
-      const pre = document.getElementById('pamRawResponsePre');
+      const vaultedPre = document.getElementById('pamRawResponsePre');
+      const serviceAccountPre = document.getElementById('saRawResponsePre');
+      const pre = vaultedPre || serviceAccountPre;
       if (!pre) {
-        alert('No PAM vaulted-secret exchange to debug yet - ask the agent an Okta user question first.');
+        alert('No PAM exchange to debug yet - ask the agent an Okta user question, or to retrieve the Salesforce service account, first.');
         return;
       }
       if (!pre.textContent.includes('REDACTED')) {
@@ -1376,24 +1737,27 @@
         return;
       }
 
+      const endpoint = pre === serviceAccountPre ? '/api/agent/debug-reveal-service-account' : '/api/agent/debug-reveal-secret';
+      const valueKey = pre === serviceAccountPre ? 'password' : 'secret';
+
       try {
-        const response = await fetch('/api/agent/debug-reveal-secret');
+        const response = await fetch(endpoint);
         const body = await response.json();
 
         if (!response.ok) {
-          alert('Could not reveal secret: ' + (body.error || `HTTP ${response.status}`));
+          alert('Could not reveal value: ' + (body.error || `HTTP ${response.status}`));
           return;
         }
 
-        const secret = body.data?.secret;
-        if (!secret) {
-          alert('No secret available to reveal.');
+        const value = body.data?.[valueKey];
+        if (!value) {
+          alert('No value available to reveal.');
           return;
         }
 
-        pre.textContent = pre.textContent.replace('REDACTED', secret);
+        pre.textContent = pre.textContent.replace('REDACTED', value);
       } catch (error) {
-        alert('Error revealing secret: ' + error.message);
+        alert('Error revealing value: ' + error.message);
       }
     }
 

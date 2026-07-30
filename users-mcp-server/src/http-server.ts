@@ -18,7 +18,10 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { logger } from './utils/logger.js';
 import { searchUsers, SearchUsersSchema } from './tools/search_users.js';
+import { getSalesforceServiceAccount, GetSalesforceServiceAccountSchema } from './tools/get_salesforce_service_account.js';
 import { getLastRevealableSecret } from './services/okta-token-exchange.js';
+import { getLastRevealableServiceAccount } from './services/okta-service-account-exchange.js';
+import { getLastRevealableA2AChain } from './services/agent-a2a-chain.js';
 
 interface HttpApiResponse {
   success: boolean;
@@ -102,7 +105,7 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       mode: 'http-rest-api',
-      tools_available: 1,
+      tools_available: 2,
     });
   });
 
@@ -116,6 +119,12 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
           endpoint: '/api/tools/search-users',
           method: 'POST',
           description: 'Search Okta users by firstName, lastName, and/or email',
+        },
+        {
+          name: 'get-salesforce-service-account',
+          endpoint: '/api/tools/get-salesforce-service-account',
+          method: 'POST',
+          description: 'Retrieve the Salesforce service-account credential vaulted in Okta PAM (O4AA service-account token exchange)',
         },
       ],
     });
@@ -142,6 +151,27 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
     }
   });
 
+  app.post('/api/tools/get-salesforce-service-account', extractUserIdToken, async (req, res) => {
+    try {
+      const params = GetSalesforceServiceAccountSchema.parse(req.body);
+      logger.info('Executing get-salesforce-service-account');
+
+      const result = await getSalesforceServiceAccount(params, req.userIdToken!);
+
+      if (!result.success) {
+        return res.status(502).json(createErrorResponse('get-salesforce-service-account', result.error || 'Unknown error'));
+      }
+
+      return res.json(createSuccessResponse('get-salesforce-service-account', result));
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json(createErrorResponse('get-salesforce-service-account', `Invalid parameters: ${error.message}`));
+      }
+      logger.error('get-salesforce-service-account request failed', { error: error.message });
+      return res.status(500).json(createErrorResponse('get-salesforce-service-account', error.message));
+    }
+  });
+
   // Local-debugging-only: reveals the real value of the most recent vaulted
   // secret exchange, for the webapp's "DEBUG" button in its Token
   // Architecture viewer. Never exposed by the normal search-users response
@@ -154,6 +184,29 @@ export async function startHttpServer(port: number = 8081): Promise<void> {
       return res.status(404).json(createErrorResponse('debug-reveal-secret', 'No vaulted secret has been retrieved yet this session'));
     }
     return res.json(createSuccessResponse('debug-reveal-secret', last));
+  });
+
+  // Local-debugging-only: mirrors /api/debug/reveal-secret above, for the
+  // service-account exchange's username/password instead of the vaulted
+  // secret's apikey.
+  app.get('/api/debug/reveal-service-account', extractUserIdToken, (_req, res) => {
+    const last = getLastRevealableServiceAccount();
+    if (!last) {
+      return res.status(404).json(createErrorResponse('debug-reveal-service-account', 'No service-account credential has been retrieved yet this session'));
+    }
+    return res.json(createSuccessResponse('debug-reveal-service-account', last));
+  });
+
+  // Local-debugging-only: reveals the raw ID-JAG and chained access token
+  // (T3) from the most recent Agent A -> Agent B A2A delegation, so the
+  // `act` claim chain-of-custody can be inspected directly rather than only
+  // via the decoded claims already present in a2aChain on tool results.
+  app.get('/api/debug/reveal-a2a-chain', extractUserIdToken, (_req, res) => {
+    const last = getLastRevealableA2AChain();
+    if (!last) {
+      return res.status(404).json(createErrorResponse('debug-reveal-a2a-chain', 'No A2A chain has been run yet this session'));
+    }
+    return res.json(createSuccessResponse('debug-reveal-a2a-chain', last));
   });
 
   app.use((req, res) => {
