@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
 import passport from 'passport';
-import { Strategy as OpenIDConnectStrategy } from 'passport-openidconnect';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -173,8 +172,12 @@ const MODEL = process.env.MODEL || process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ||
 // Okta Configuration (User Authentication - Inbound) - FROM ENV
 const OKTA_DOMAIN = process.env.OKTA_DOMAIN || 'https://blackcastle.oktapreview.com';
 const OKTA_ISSUER = process.env.OKTA_ISSUER || 'https://blackcastle.oktapreview.com/oauth2/aus2o8ra5nfzluTlI0h8';
+// NOTE: under the current Okta AI Agent model, OKTA_CLIENT_ID and
+// AGENT_CLIENT_ID are the SAME unified, secret-less client identity - there
+// is no client_secret. The authorization_code exchange below authenticates
+// with private_key_jwt via generateClientAssertion(), exactly like every
+// other token exchange in this file.
 const OKTA_CLIENT_ID = process.env.OKTA_CLIENT_ID;
-const OKTA_CLIENT_SECRET = process.env.OKTA_CLIENT_SECRET;
 const OKTA_REDIRECT_URI = process.env.OKTA_REDIRECT_URI || 'http://localhost:3001/authorization-code/callback';
 const OKTA_LOGOUT_REDIRECT_URI = process.env.OKTA_LOGOUT_REDIRECT_URI || 'http://localhost:3001';
 
@@ -195,7 +198,6 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-secret-in-prod
 // Validate required environment variables
 const requiredEnvVars = [
   'OKTA_CLIENT_ID',
-  'OKTA_CLIENT_SECRET',
   'AGENT_CLIENT_ID',
   'CUSTOM_AUTH_SERVER'
 ];
@@ -598,6 +600,10 @@ passport.deserializeUser((user, done) => {
   done(null, user);
 });
 
+// Middleware
+app.use(cors());
+app.use(express.json());
+
 // Helper to parse JWT token
 function parseJwt(token) {
   try {
@@ -610,54 +616,16 @@ function parseJwt(token) {
   }
 }
 
-// Configure OpenID Connect Strategy for Okta (User Authentication)
-passport.use('oidc', new OpenIDConnectStrategy({
-  issuer: OKTA_ISSUER,
-  authorizationURL: `${OKTA_DOMAIN}/oauth2/v1/authorize`,
-  tokenURL: `${OKTA_DOMAIN}/oauth2/v1/token`,
-  userInfoURL: `${OKTA_DOMAIN}/oauth2/v1/userinfo`,
-  clientID: OKTA_CLIENT_ID,
-  clientSecret: OKTA_CLIENT_SECRET,
-  callbackURL: OKTA_REDIRECT_URI,
-  scope: 'openid profile email',
-  passReqToCallback: true
-}, function verify(req, issuer, profile, context, idToken, accessToken, refreshToken, cb) {
-  console.log('OIDC verify callback:', { issuer, profileId: profile?.id, hasIdToken: !!idToken, hasAccessToken: !!accessToken });
-  try {
-    const user = {
-      id: profile.id,
-      displayName: profile.displayName || profile._json?.name,
-      email: profile._json?.email || profile.emails?.[0]?.value,
-      firstName: profile._json?.given_name || profile.name?.givenName,
-      lastName: profile._json?.family_name || profile.name?.familyName,
-      idToken: idToken,
-      accessToken: accessToken,
-      idTokenParsed: parseJwt(idToken),
-      accessTokenParsed: parseJwt(accessToken)
-    };
+// ─── User Authentication (Inbound, Authorization Code + private_key_jwt) ────
+// The webapp/agent client is secret-less under the current Okta AI Agent
+// model, so the authorization_code exchange can't use passport-openidconnect
+// (which only knows client_secret_post/basic). Instead we drive the
+// authorize redirect and token exchange ourselves, authenticating with the
+// same private_key_jwt client assertion used for every other token exchange
+// in this file - and manually perform the OIDC ID token validation checks
+// that passport-openidconnect would otherwise have done for us.
+const OIDC_SESSION_KEY = 'oidc';
 
-    logToken('USER_ID_TOKEN (OIDC Login)', idToken, {
-      flow: 'authorization_code',
-      user: profile._json?.email || profile.id
-    });
-    logToken('USER_ACCESS_TOKEN (OIDC Login)', accessToken, {
-      flow: 'authorization_code',
-      user: profile._json?.email || profile.id
-    });
-
-    console.log('User created with tokens');
-    return cb(null, user);
-  } catch (err) {
-    console.error('Error in OIDC verify:', err);
-    return cb(err);
-  }
-}));
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Authentication check middleware
 function ensureAuthenticated(req, res, next) {
   if (req.isAuthenticated()) {
     return next();
@@ -665,31 +633,138 @@ function ensureAuthenticated(req, res, next) {
   res.status(401).json({ error: 'Not authenticated', loginUrl: '/login' });
 }
 
-// Login route - redirects to Okta
-app.get('/login', passport.authenticate('oidc'));
+// Login route - redirects to Okta's authorize endpoint
+app.get('/login', (req, res) => {
+  const state = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+  req.session[OIDC_SESSION_KEY] = { state, nonce };
 
-// OAuth callback route
-app.get('/authorization-code/callback', (req, res, next) => {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: OKTA_CLIENT_ID,
+    redirect_uri: OKTA_REDIRECT_URI,
+    scope: 'openid profile email',
+    state,
+    nonce
+  });
+
+  res.redirect(`${OKTA_DOMAIN}/oauth2/v1/authorize?${params.toString()}`);
+});
+
+// OAuth callback route - exchanges the authorization code for tokens using
+// private_key_jwt (client_assertion), then validates the ID token by hand.
+app.get('/authorization-code/callback', async (req, res) => {
   console.log('Callback received, query:', req.query);
-  passport.authenticate('oidc', (err, user, info) => {
-    console.log('Passport authenticate result:', { err, user, info });
-    if (err) {
-      console.error('Authentication error:', err);
-      return res.redirect('/login-error?error=' + encodeURIComponent(err.message || 'Unknown error'));
+
+  try {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      throw new Error(error_description || error);
     }
-    if (!user) {
-      console.error('No user returned:', info);
-      return res.redirect('/login-error?error=' + encodeURIComponent(info?.message || 'No user'));
+    if (!code) {
+      throw new Error('No authorization code returned');
     }
+
+    const savedOidc = req.session[OIDC_SESSION_KEY];
+    delete req.session[OIDC_SESSION_KEY];
+    if (!savedOidc || !state || state !== savedOidc.state) {
+      throw new Error('Invalid authorization request state');
+    }
+
+    const tokenEndpoint = `${OKTA_DOMAIN}/oauth2/v1/token`;
+    const clientAssertion = generateClientAssertion(OKTA_CLIENT_ID, tokenEndpoint);
+
+    const tokenParams = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: OKTA_REDIRECT_URI,
+      client_id: OKTA_CLIENT_ID,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: clientAssertion
+    });
+
+    const tokenResponse = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      body: tokenParams.toString()
+    });
+
+    if (!tokenResponse.ok) {
+      const errText = await tokenResponse.text();
+      throw new Error(`Token exchange failed: ${tokenResponse.status} - ${errText}`);
+    }
+
+    const tokenData = await tokenResponse.json();
+    const idToken = tokenData.id_token;
+    const accessToken = tokenData.access_token;
+
+    if (!idToken) {
+      throw new Error('ID token not present in token response');
+    }
+
+    const claims = parseJwt(idToken);
+    if (!claims) {
+      throw new Error('Failed to parse ID token');
+    }
+
+    // Manual OIDC ID Token Validation (subset of the Basic Client Profile
+    // checks passport-openidconnect used to run for us).
+    if (!claims.iss || !claims.sub || !claims.aud || !claims.exp || !claims.iat) {
+      throw new Error('ID token missing required claims');
+    }
+    if (claims.iss !== OKTA_ISSUER) {
+      throw new Error('ID token not issued by expected OpenID provider');
+    }
+    const audOk = typeof claims.aud === 'string'
+      ? claims.aud === OKTA_CLIENT_ID
+      : Array.isArray(claims.aud) && claims.aud.includes(OKTA_CLIENT_ID);
+    if (!audOk) {
+      throw new Error('ID token not intended for this relying party');
+    }
+    if (claims.exp <= Math.floor(Date.now() / 1000)) {
+      throw new Error('ID token has expired');
+    }
+    if (claims.nonce !== savedOidc.nonce) {
+      throw new Error('ID token contains invalid nonce');
+    }
+
+    const user = {
+      id: claims.sub,
+      displayName: claims.name,
+      email: claims.email,
+      firstName: claims.given_name,
+      lastName: claims.family_name,
+      idToken,
+      accessToken,
+      idTokenParsed: claims,
+      accessTokenParsed: parseJwt(accessToken)
+    };
+
+    logToken('USER_ID_TOKEN (OIDC Login)', idToken, {
+      flow: 'authorization_code + private_key_jwt',
+      user: claims.email || claims.sub
+    });
+    logToken('USER_ACCESS_TOKEN (OIDC Login)', accessToken, {
+      flow: 'authorization_code + private_key_jwt',
+      user: claims.email || claims.sub
+    });
+
     req.logIn(user, (loginErr) => {
       if (loginErr) {
         console.error('Login error:', loginErr);
         return res.redirect('/login-error?error=' + encodeURIComponent(loginErr.message));
       }
-      console.log('User logged in successfully:', user);
+      console.log('User logged in successfully:', user.email || user.id);
       return res.redirect('/');
     });
-  })(req, res, next);
+  } catch (err) {
+    console.error('Authentication error:', err);
+    return res.redirect('/login-error?error=' + encodeURIComponent(err.message || 'Unknown error'));
+  }
 });
 
 // Login error route
@@ -1393,12 +1468,25 @@ Use these tools to provide accurate, data-driven answers.`;
           let mcpAccessToken = null;
           try {
             const tokenData = await getMcpAccessToken(user.idToken, user.accessToken, user.id);
+            // getMcpAccessToken() never throws - it catches internally and
+            // returns { error: true, errorMessage, accessToken: null } on
+            // failure (see its own catch block). Check that explicitly
+            // instead of trusting the try/catch here, otherwise a failed
+            // exchange silently falls through as "obtained" with a null
+            // token, which the MCP server then rejects with a confusing
+            // "Invalid token format" instead of the real Okta error.
+            if (tokenData.error) {
+              throw new Error(tokenData.errorMessage);
+            }
             mcpAccessToken = tokenData.accessToken;
             console.log('MCP access token obtained (via ID-JAG)');
           } catch (e) {
             console.error('Failed to get MCP access token:', e.message);
+            toolResult = { error: `Failed to get MCP access token: ${e.message}` };
           }
-          toolResult = await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
+          if (!toolResult) {
+            toolResult = await executeMcpTool(toolUse.name, toolUse.input, mcpAccessToken);
+          }
         }
 
         toolResults.push({

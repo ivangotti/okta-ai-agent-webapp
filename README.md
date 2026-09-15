@@ -467,9 +467,8 @@ Edit `.env` with your credentials:
 |----------|-------------|---------|
 | `OKTA_DOMAIN` | Your Okta org | `https://your-org.okta.com` |
 | `OKTA_ISSUER` | ORG server issuer | `https://your-org.okta.com` |
-| `OKTA_CLIENT_ID` | Webapp OAuth client | `0oa2o8rchw8BvvkEA0h8` |
-| `OKTA_CLIENT_SECRET` | Webapp secret | (from Okta) |
-| `AGENT_CLIENT_ID` | AI Agent ID | `wlp2o86e2kkTN0tuS0h8` |
+| `OKTA_CLIENT_ID` | Webapp OAuth client (unified, secret-less; same ID as `AGENT_CLIENT_ID`) | `wlp2tmxwq3hax6EMS0h8` |
+| `AGENT_CLIENT_ID` | AI Agent ID (same identity as `OKTA_CLIENT_ID`) | `wlp2tmxwq3hax6EMS0h8` |
 | `CUSTOM_AUTH_SERVER` | Custom auth server | `https://your-org.okta.com/oauth2/aus...` |
 | `AGENT_PRIVATE_KEY_PATH` | Path to agent JWK | `./agent-keys/agent-private-key.json` |
 | `LITELLM_KEY` | LiteLLM API key | (your key) |
@@ -551,7 +550,7 @@ User → Webapp → Claude AI ─(decides)┤
 
 | Operation | Client ID | Auth Method |
 |-----------|-----------|-------------|
-| **User Login** | `YOUR_WEBAPP_CLIENT_ID` | client_secret |
+| **User Login** | `YOUR_WEBAPP_CLIENT_ID` (= `YOUR_AGENT_ID`, unified client) | private_key_jwt (RS256) |
 | **ID-JAG Exchange** | `YOUR_AGENT_ID` | private_key_jwt (RS256) |
 
 ### Getting an ID-JAG Token
@@ -874,11 +873,10 @@ ANTHROPIC_BASE_URL=https://your-litellm-provider.com
 LITELLM_KEY=your-api-key
 MODEL=claude-4-5-sonnet
 
-# Okta User Authentication
+# Okta User Authentication (unified, secret-less client - same ID as agent)
 OKTA_DOMAIN=https://your-org.okta.com
 OKTA_ISSUER=https://your-org.okta.com
 OKTA_CLIENT_ID=YOUR_WEBAPP_CLIENT_ID
-OKTA_CLIENT_SECRET=your-client-secret
 OKTA_REDIRECT_URI=http://localhost:3001/authorization-code/callback
 OKTA_LOGOUT_REDIRECT_URI=http://localhost:3001
 

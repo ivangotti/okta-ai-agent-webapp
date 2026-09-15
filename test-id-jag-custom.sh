@@ -16,8 +16,8 @@ function jwkToPem(jwk) {
 
 const now = Math.floor(Date.now() / 1000);
 const payload = {
-  iss: 'wlp2o86e2kkTN0tuS0h8',
-  sub: 'wlp2o86e2kkTN0tuS0h8',
+  iss: 'wlp2tmxwq3hax6EMS0h8',
+  sub: 'wlp2tmxwq3hax6EMS0h8',
   aud: endpoint,
   iat: now,
   exp: now + 300,

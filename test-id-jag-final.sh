@@ -11,7 +11,7 @@ const fs = require('fs');
 
 const key = JSON.parse(fs.readFileSync('./agent-keys/agent-private-key.json', 'utf-8'));
 const endpoint = 'https://blackcastle.oktapreview.com/oauth2/default/v1/token';
-const clientId = 'wlp2o86e2kkTN0tuS0h8';
+const clientId = 'wlp2tmxwq3hax6EMS0h8';
 
 function jwkToPem(jwk) {
   const keyObject = crypto.createPrivateKey({ key: jwk, format: 'jwk' });
@@ -41,7 +41,7 @@ echo "=========================================="
 curl -s -X POST 'https://blackcastle.oktapreview.com/oauth2/default/v1/token' \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
-  --data-urlencode "client_id=wlp2o86e2kkTN0tuS0h8" \
+  --data-urlencode "client_id=wlp2tmxwq3hax6EMS0h8" \
   --data-urlencode "subject_token=$ID_TOKEN" \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
   --data-urlencode "audience=https://blackcastle.oktapreview.com/oauth2/aus2o8ra5nfzluTlI0h8" \
@@ -57,7 +57,7 @@ echo "========================================================"
 curl -s -X POST 'https://blackcastle.oktapreview.com/oauth2/default/v1/token' \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
-  --data-urlencode "client_id=wlp2o86e2kkTN0tuS0h8" \
+  --data-urlencode "client_id=wlp2tmxwq3hax6EMS0h8" \
   --data-urlencode "subject_token=$ID_TOKEN" \
   --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:id_token" \
   --data-urlencode "audience=https://blackcastle.oktapreview.com/oauth2/aus2o8ra5nfzluTlI0h8" \
